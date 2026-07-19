@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <title>gdrive-sync</title>
+  <path d="M 142.12 200.64 A 74.00 74.00 0 0 0 201.99 129.29" fill="none" stroke="#f5b301" stroke-width="30.0" stroke-linecap="round"/>
+  <path d="M 201.99 129.29 A 74.00 74.00 0 0 0 148.40 56.87" fill="none" stroke="#ea4d3d" stroke-width="30.0" stroke-linecap="round"/>
+  <path d="M 124.13 54.10 L 154.19 36.68 L 142.61 77.05 Z" fill="#ea4d3d"/>
+  <path d="M 113.88 55.36 A 74.00 74.00 0 0 0 54.01 126.71" fill="none" stroke="#3d7bf4" stroke-width="30.0" stroke-linecap="round"/>
+  <path d="M 54.01 126.71 A 74.00 74.00 0 0 0 107.60 199.13" fill="none" stroke="#1fa463" stroke-width="30.0" stroke-linecap="round"/>
+  <path d="M 131.87 201.90 L 101.81 219.32 L 113.39 178.95 Z" fill="#1fa463"/>
+</svg>

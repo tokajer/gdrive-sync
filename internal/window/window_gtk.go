@@ -21,8 +21,11 @@ typedef void  (*widget_t)(void*);
 typedef void  (*load_uri_t)(void*, const char*);
 typedef void  (*void_fn_t)(void);
 typedef unsigned long (*connect_t)(void*, const char*, void*, void*, void*, int);
+typedef void  (*set_prgname_t)(const char*);
+typedef int   (*deficon_file_t)(const char*, void**);
+typedef int   (*icon_file_t)(void*, const char*, void**);
 
-static void *h_gtk, *h_gobj, *h_wk;
+static void *h_gtk, *h_gobj, *h_wk, *h_glib;
 
 static init_check_t p_init_check;
 static window_new_t p_window_new;
@@ -36,6 +39,9 @@ static void_fn_t    p_main;
 static void_fn_t    p_main_quit;
 static new_void_t   p_wk_new;
 static load_uri_t   p_wk_load;
+static set_prgname_t  p_set_prgname;
+static deficon_file_t p_set_deficon;
+static icon_file_t    p_set_icon;
 
 // destroy handler: quit the GTK main loop so the process exits.
 static void on_destroy(void* w, void* d) {
@@ -46,6 +52,7 @@ static int load_syms(void) {
 	h_gtk  = dlopen("libgtk-3.so.0", RTLD_NOW | RTLD_GLOBAL);
 	h_gobj = dlopen("libgobject-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
 	h_wk   = dlopen("libwebkit2gtk-4.1.so.0", RTLD_NOW | RTLD_GLOBAL);
+	h_glib = dlopen("libglib-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
 	if (!h_gtk)  return 1;
 	if (!h_gobj) return 2;
 	if (!h_wk)   return 3;
@@ -63,6 +70,12 @@ static int load_syms(void) {
 	p_wk_new     = (new_void_t)   dlsym(h_wk, "webkit_web_view_new");
 	p_wk_load    = (load_uri_t)   dlsym(h_wk, "webkit_web_view_load_uri");
 
+	// Optional: setting the Wayland app_id and the window icon. Missing symbols
+	// only mean a generic icon, so they must not fail initialisation.
+	p_set_prgname = (set_prgname_t)  dlsym(h_glib ? h_glib : h_gobj, "g_set_prgname");
+	p_set_deficon = (deficon_file_t) dlsym(h_gtk, "gtk_window_set_default_icon_from_file");
+	p_set_icon    = (icon_file_t)    dlsym(h_gtk, "gtk_window_set_icon_from_file");
+
 	if (!p_init_check || !p_window_new || !p_set_title || !p_set_size ||
 	    !p_add || !p_show_all || !p_connect || !p_main || !p_main_quit ||
 	    !p_wk_new || !p_wk_load) return 4;
@@ -70,14 +83,25 @@ static int load_syms(void) {
 }
 
 // run opens the window and blocks in the GTK main loop until it is closed.
-static int run_window(const char* title, const char* url) {
+static int run_window(const char* title, const char* url, const char* icon) {
 	int rc = load_syms();
 	if (rc) return rc;
+
+	// Set the Wayland app_id before the display connection is made so the
+	// compositor can associate the window with the app (and its .desktop icon).
+	if (p_set_prgname) p_set_prgname("gdrive-sync");
+
 	if (!p_init_check(0, 0)) return 10; // no display / init failed
+
+	// Set the window icon directly from the bundled logo. This works even when
+	// no .desktop file is installed (e.g. a freshly launched AppImage), so the
+	// window shows the app logo instead of a generic placeholder.
+	if (icon && icon[0] && p_set_deficon) p_set_deficon(icon, 0);
 
 	void* win = p_window_new(0); // GTK_WINDOW_TOPLEVEL
 	p_set_title(win, title);
 	p_set_size(win, 980, 720);
+	if (icon && icon[0] && p_set_icon) p_set_icon(win, icon, 0);
 	p_connect(win, "destroy", (void*)on_destroy, 0, 0, 0);
 
 	void* wv = p_wk_new();
@@ -113,10 +137,12 @@ func Open(title, url string) error {
 
 	ct := C.CString(title)
 	cu := C.CString(url)
+	ci := C.CString(iconPath()) // "" if the icon could not be materialised
 	defer C.free(unsafe.Pointer(ct))
 	defer C.free(unsafe.Pointer(cu))
+	defer C.free(unsafe.Pointer(ci))
 
-	rc := C.run_window(ct, cu)
+	rc := C.run_window(ct, cu, ci)
 	switch int(rc) {
 	case 0:
 		return nil

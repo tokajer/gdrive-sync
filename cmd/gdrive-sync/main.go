@@ -72,6 +72,12 @@ func loadOrExit() *config.Config {
 func runDaemon() {
 	cfg := loadOrExit()
 
+	// Register a user-scope .desktop file + icon so the Wayland compositor can
+	// show the app logo in the settings window's titlebar/taskbar (best-effort).
+	if err := window.InstallDesktopEntry(); err != nil {
+		log.Printf("Desktop-Integration nicht möglich: %v", err)
+	}
+
 	// Single-instance: if a daemon already answers on the web port, just open
 	// its settings UI and exit (mimics clicking the app icon again).
 	if instanceRunning(cfg.WebPort) {
