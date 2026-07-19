@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Google Drive Sync
+GenericName=Cloud-Synchronisation
+Comment=Google Drive mit dem Rechner synchronisieren
+Exec=gdrive-sync
+Icon=gdrive-sync
+Terminal=false
+Categories=Network;FileTransfer;Utility;
+Keywords=google;drive;sync;cloud;backup;
+StartupNotify=false

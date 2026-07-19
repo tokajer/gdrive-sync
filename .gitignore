@@ -1,0 +1,24 @@
+# Build output
+/build/
+/dist/
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Editor / tooling
+/.claude/
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.direnv/
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,279 @@
+// Package webui serves the local settings interface on 127.0.0.1. It exposes a
+// small JSON API driven by the manager plus an embedded single-page frontend.
+package webui
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os/exec"
+	"sync"
+	"time"
+
+	"gdrive-sync/internal/config"
+	"gdrive-sync/internal/manager"
+)
+
+//go:embed index.html
+var indexHTML []byte
+
+// Server is the settings web server.
+type Server struct {
+	mgr  *manager.Manager
+	cfg  *config.Config
+	addr string
+	log  func(string, ...any)
+
+	mu          sync.Mutex
+	loginActive bool
+	loginLines  []string
+	loginErr    string
+}
+
+// New creates a settings server bound to 127.0.0.1 on the config's WebPort.
+func New(mgr *manager.Manager, cfg *config.Config, log func(string, ...any)) *Server {
+	if log == nil {
+		log = func(string, ...any) {}
+	}
+	return &Server{
+		mgr:  mgr,
+		cfg:  cfg,
+		addr: fmt.Sprintf("127.0.0.1:%d", cfg.WebPort),
+		log:  log,
+	}
+}
+
+// URL returns the address the UI is reachable at.
+func (s *Server) URL() string { return "http://" + s.addr }
+
+// ListenAndServe starts the HTTP server, blocking until ctx is cancelled.
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/mode", s.handleMode)
+	mux.HandleFunc("/api/local-dir", s.handleLocalDir)
+	mux.HandleFunc("/api/sync-now", s.handleSyncNow)
+	mux.HandleFunc("/api/pause", s.handlePause)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/login-status", s.handleLoginStatus)
+	mux.HandleFunc("/api/logout", s.handleLogout)
+	mux.HandleFunc("/api/browse", s.handleBrowse)
+	mux.HandleFunc("/api/offline", s.handleOffline)
+	mux.HandleFunc("/api/open", s.handleOpen)
+
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: mux}
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+	err = srv.Serve(ln)
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(indexHTML)
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	st := s.mgr.Status()
+	writeJSON(w, map[string]any{
+		"status":     st,
+		"configured": s.cfg.Configured(),
+		"web_url":    s.URL(),
+	})
+}
+
+func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	mode := config.ModeStream
+	if body.Mode == string(config.ModeMirror) {
+		mode = config.ModeMirror
+	}
+	if err := s.mgr.SetMode(mode); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLocalDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		http.Error(w, "ungültiger Pfad", http.StatusBadRequest)
+		return
+	}
+	s.cfg.LocalDir = body.Path
+	if err := s.cfg.Save(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Restart in the current mode to apply the new location.
+	_ = s.mgr.SetMode(s.cfg.Mode)
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
+	s.mgr.SyncNow()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paused bool `json:"paused"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Paused {
+		s.mgr.Pause()
+	} else {
+		s.mgr.Resume()
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.loginActive {
+		s.mu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "already": true})
+		return
+	}
+	s.loginActive = true
+	s.loginLines = nil
+	s.loginErr = ""
+	s.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		err := s.mgr.Login(ctx, func(line string) {
+			s.mu.Lock()
+			s.loginLines = append(s.loginLines, line)
+			if len(s.loginLines) > 100 {
+				s.loginLines = s.loginLines[len(s.loginLines)-100:]
+			}
+			s.mu.Unlock()
+			s.log("[login] %s", line)
+		})
+		s.mu.Lock()
+		s.loginActive = false
+		if err != nil {
+			s.loginErr = err.Error()
+		}
+		s.mu.Unlock()
+	}()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLoginStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	resp := map[string]any{
+		"active":     s.loginActive,
+		"lines":      append([]string{}, s.loginLines...),
+		"error":      s.loginErr,
+		"configured": s.cfg.Configured(),
+		"account":    s.cfg.AccountEmail,
+	}
+	s.mu.Unlock()
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.mgr.Logout(ctx); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
+	rel := r.URL.Query().Get("path")
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	entries, err := s.mgr.Rclone().List(ctx, rel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	pinned := map[string]bool{}
+	for _, p := range s.cfg.OfflinePaths {
+		pinned[p] = true
+	}
+	type item struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		IsDir   bool   `json:"is_dir"`
+		Size    int64  `json:"size"`
+		Offline bool   `json:"offline"`
+	}
+	items := make([]item, 0, len(entries))
+	for _, e := range entries {
+		full := e.Path
+		if rel != "" {
+			full = rel + "/" + e.Path
+		}
+		items = append(items, item{
+			Name:    e.Name,
+			Path:    full,
+			IsDir:   e.IsDir,
+			Size:    e.Size,
+			Offline: pinned[full],
+		})
+	}
+	writeJSON(w, map[string]any{"path": rel, "entries": items})
+}
+
+func (s *Server) handleOffline(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+		On   bool   `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		http.Error(w, "ungültiger Pfad", http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.SetOffline(body.Path, body.On); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		_ = exec.Command("xdg-open", s.cfg.LocalDir).Start()
+	}()
+	writeJSON(w, map[string]any{"ok": true})
+}

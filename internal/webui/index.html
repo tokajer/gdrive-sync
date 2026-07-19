@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Drive Sync</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --fg: #1a1c1f; --muted: #61656c;
+    --border: #e2e4e8; --accent: #1a73e8; --accent-fg: #fff;
+    --ok: #188038; --warn: #e37400; --err: #d93025; --idle: #5f6368;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181b; --panel: #212327; --fg: #e8eaed; --muted: #9aa0a6;
+      --border: #34363b; --accent: #8ab4f8; --accent-fg: #17181b;
+      --ok: #81c995; --warn: #fdd663; --err: #f28b82; --idle: #9aa0a6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--fg); padding: 24px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; margin: 0 0 4px; }
+  h1 svg { width: 28px; height: 28px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 14px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--idle); }
+  .dot.idle { background: var(--ok); }
+  .dot.syncing { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.starting { background: var(--warn); animation: pulse 1.2s infinite; }
+  .dot.paused { background: var(--idle); }
+  .dot.error { background: var(--err); }
+  .dot.disconnected { background: var(--idle); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .modes { display: flex; gap: 10px; }
+  .mode {
+    flex: 1; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer;
+  }
+  .mode.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .mode b { display: block; margin-bottom: 3px; }
+  .path { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+  .crumbs { display: flex; gap: 4px; flex-wrap: wrap; font-size: 13px; margin-bottom: 10px; }
+  .crumbs a { color: var(--accent); cursor: pointer; }
+  .list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border); }
+  .item:first-child { border-top: none; }
+  .item .name { flex: 1; cursor: default; display: flex; align-items: center; gap: 8px; }
+  .item .name.dir { cursor: pointer; }
+  .item .name.dir:hover { color: var(--accent); }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); }
+  .off { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+  .hidden { display: none; }
+  .loginbox { background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin-top: 12px; font-size: 13px; }
+  .loginbox a { color: var(--accent); word-break: break-all; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>
+    <svg viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg"><path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/><path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/><path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/><path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/><path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/></svg>
+    Google Drive Sync
+  </h1>
+  <p class="sub">Synchronisiert Google Drive mit deinem Rechner – wie der Windows-Client.</p>
+
+  <!-- STATUS -->
+  <div class="card">
+    <div class="row">
+      <span class="badge"><span id="dot" class="dot disconnected"></span><span id="state">Wird geladen…</span></span>
+      <span class="spacer"></span>
+      <span id="account" class="muted"></span>
+    </div>
+    <div id="stats" class="muted" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="btnSync" class="primary">Jetzt synchronisieren</button>
+      <button id="btnPause">Pausieren</button>
+      <button id="btnOpen">Ordner öffnen</button>
+      <span class="spacer"></span>
+      <button id="btnLogout" class="hidden">Abmelden</button>
+    </div>
+  </div>
+
+  <!-- LOGIN (shown when not configured) -->
+  <div class="card hidden" id="loginCard">
+    <h2>Anmeldung</h2>
+    <p class="muted">Melde dich mit deinem Google-Konto an. Es öffnet sich ein Browserfenster.</p>
+    <button id="btnLogin" class="primary">Bei Google anmelden</button>
+    <div id="loginBox" class="loginbox hidden"></div>
+  </div>
+
+  <!-- MODE -->
+  <div class="card" id="modeCard">
+    <h2>Sync-Modus</h2>
+    <div class="modes">
+      <div class="mode" id="modeStream" data-mode="stream">
+        <b>Stream (virtuelles Laufwerk)</b>
+        <span class="muted">Alle Dateien sichtbar, werden bei Bedarf geladen. Einzelne Ordner offline verfügbar machen.</span>
+      </div>
+      <div class="mode" id="modeMirror" data-mode="mirror">
+        <b>Mirror (lokale Kopie)</b>
+        <span class="muted">Vollständige Zwei-Wege-Kopie. Alles offline verfügbar, belegt Speicher.</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <span class="muted">Ordner:</span>
+      <span id="localDir" class="path"></span>
+      <button id="btnChangeDir" style="padding:4px 10px">Ändern</button>
+    </div>
+  </div>
+
+  <!-- OFFLINE BROWSER (stream mode only) -->
+  <div class="card" id="offlineCard">
+    <h2>Offline verfügbar</h2>
+    <p class="muted">Wähle Ordner, die dauerhaft lokal gespeichert und offline verfügbar bleiben sollen.</p>
+    <div id="crumbs" class="crumbs"></div>
+    <div id="list" class="list"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let cur = { configured:false, mode:'stream', browsePath:'' };
+
+async function api(path, opts){ const r = await fetch(path, opts); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+function post(path, body){ return api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})}); }
+
+const stateLabels = { disconnected:'Nicht angemeldet', starting:'Wird gestartet…', syncing:'Synchronisiere…', idle:'Auf dem neuesten Stand', paused:'Pausiert', error:'Fehler' };
+
+function fmtBytes(n){ if(!n) return ''; const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(1)+' '+u[i]; }
+
+async function refreshStatus(){
+  try {
+    const d = await api('/api/status');
+    const st = d.status; cur.configured = d.configured; cur.mode = st.mode;
+    $('#dot').className = 'dot ' + st.state;
+    $('#state').textContent = st.message || stateLabels[st.state] || st.state;
+    $('#account').textContent = st.account || '';
+    let stats = '';
+    if(st.speed>0) stats = '↑↓ ' + fmtBytes(st.speed)+'/s';
+    if(st.last_sync && st.last_sync.indexOf('0001')!==0) stats += (stats?'  ·  ':'') + 'Letzter Abgleich: '+ new Date(st.last_sync).toLocaleTimeString();
+    if(st.errors>0) stats += (stats?'  ·  ':'') + st.errors+' Fehler';
+    $('#stats').textContent = stats;
+
+    $('#btnPause').textContent = st.state==='paused' ? 'Fortsetzen' : 'Pausieren';
+    $('#loginCard').classList.toggle('hidden', d.configured);
+    $('#btnLogout').classList.toggle('hidden', !d.configured);
+    $('#modeCard').classList.toggle('hidden', !d.configured);
+    $('#offlineCard').classList.toggle('hidden', !d.configured || st.mode!=='stream');
+
+    $('#localDir').textContent = st.local_dir;
+    $('#modeStream').classList.toggle('active', st.mode==='stream');
+    $('#modeMirror').classList.toggle('active', st.mode==='mirror');
+  } catch(e){ $('#state').textContent = 'Daemon nicht erreichbar'; }
+}
+
+// --- actions ---
+$('#btnSync').onclick = ()=> post('/api/sync-now');
+$('#btnOpen').onclick = ()=> post('/api/open');
+$('#btnPause').onclick = async ()=>{ const paused = $('#btnPause').textContent==='Pausieren'; await post('/api/pause',{paused}); refreshStatus(); };
+$('#btnLogout').onclick = async ()=>{ if(confirm('Wirklich abmelden?')){ await post('/api/logout'); refreshStatus(); } };
+$('#btnChangeDir').onclick = async ()=>{ const p = prompt('Lokaler Ordner (voller Pfad):', $('#localDir').textContent); if(p){ await post('/api/local-dir',{path:p}); refreshStatus(); } };
+
+document.querySelectorAll('.mode').forEach(el => el.onclick = async ()=>{
+  const mode = el.dataset.mode;
+  if(mode===cur.mode) return;
+  await post('/api/mode',{mode});
+  refreshStatus();
+  if(mode==='stream') browse('');
+});
+
+// --- login ---
+$('#btnLogin').onclick = async ()=>{
+  $('#loginBox').classList.remove('hidden');
+  $('#loginBox').innerHTML = 'Starte Anmeldung… ein Browserfenster sollte sich öffnen.';
+  await post('/api/login');
+  pollLogin();
+};
+async function pollLogin(){
+  const d = await api('/api/login-status');
+  let html = '';
+  const urlLine = d.lines.find(l => l.indexOf('http://127.0.0.1')>=0 || l.indexOf('https://')>=0);
+  if(urlLine){
+    const m = urlLine.match(/https?:\/\/\S+/);
+    if(m) html += 'Falls sich kein Browser öffnet, öffne diesen Link:<br><a href="'+m[0]+'" target="_blank">'+m[0]+'</a><br><br>';
+  }
+  if(d.error) html += '<b style="color:var(--err)">Fehler:</b> '+d.error;
+  else if(!d.active && d.configured) html += '<b style="color:var(--ok)">Angemeldet als '+d.account+'.</b>';
+  else if(d.active) html += 'Warte auf Bestätigung im Browser…';
+  $('#loginBox').innerHTML = html || 'Starte…';
+  if(d.active){ setTimeout(pollLogin, 1000); }
+  else { refreshStatus(); if(d.configured) setTimeout(()=>$('#loginBox').classList.add('hidden'), 4000); }
+}
+
+// --- offline browser ---
+async function browse(path){
+  cur.browsePath = path;
+  const d = await api('/api/browse?path='+encodeURIComponent(path));
+  // breadcrumbs
+  const cr = $('#crumbs'); cr.innerHTML='';
+  const mk = (label, p)=>{ const a=document.createElement('a'); a.textContent=label; a.onclick=()=>browse(p); return a; };
+  cr.appendChild(mk('🏠 Drive',''));
+  let acc='';
+  (path? path.split('/'):[]).forEach(part=>{ acc = acc? acc+'/'+part : part; cr.appendChild(document.createTextNode(' / ')); cr.appendChild(mk(part, acc)); });
+  // list
+  const list = $('#list'); list.innerHTML='';
+  if(d.entries.length===0){ list.innerHTML='<div class="item muted">Leerer Ordner</div>'; }
+  d.entries.forEach(e=>{
+    const item=document.createElement('div'); item.className='item';
+    const name=document.createElement('div'); name.className='name'+(e.is_dir?' dir':'');
+    name.innerHTML=(e.is_dir?'📁 ':'📄 ')+escapeHtml(e.name);
+    if(e.is_dir) name.onclick=()=>browse(e.path);
+    item.appendChild(name);
+    if(e.is_dir){
+      const off=document.createElement('label'); off.className='off';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=e.offline;
+      cb.onchange=async ()=>{ await post('/api/offline',{path:e.path, on:cb.checked}); };
+      off.appendChild(cb); off.appendChild(document.createTextNode('offline'));
+      item.appendChild(off);
+    } else if(e.offline){
+      const p=document.createElement('span'); p.className='pill'; p.textContent='offline'; item.appendChild(p);
+    }
+    list.appendChild(item);
+  });
+}
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// init
+refreshStatus();
+setInterval(refreshStatus, 2500);
+setTimeout(async ()=>{ const d = await api('/api/status'); if(d.configured && d.status.mode==='stream') browse(''); }, 400);
+</script>
+</body>
+</html>
