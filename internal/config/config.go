@@ -60,6 +60,11 @@ type Config struct {
 	ConflictMode string `yaml:"conflict_mode"`
 	// AutostartDisabled turns off the "start on login" autostart entry when set.
 	AutostartDisabled bool `yaml:"autostart_disabled"`
+	// UpdatePrerelease includes prereleases when checking for updates.
+	UpdatePrerelease bool `yaml:"update_prerelease"`
+	// UpdateCheckDisabled turns off automatic update checks (on start and
+	// periodically) when set.
+	UpdateCheckDisabled bool `yaml:"update_check_disabled"`
 	// WebPort is the local settings-UI port (127.0.0.1 only).
 	WebPort int `yaml:"web_port"`
 	// Google holds optional custom OAuth credentials.

@@ -44,6 +44,10 @@ mitgeliefert wird.
   Dateien werden automatisch aufgeräumt.
 - **Autostart beim Anmelden:** Standardmäßig aktiv (XDG-Autostart), in der
   Oberfläche abschaltbar.
+- **Automatische Updates:** Prüft beim Start und periodisch die GitHub-Releases,
+  meldet neue Versionen und aktualisiert die AppImage auf Knopfdruck. Optional
+  werden auch **Vorabversionen (Prereleases)** berücksichtigt. Die aktuelle
+  Version wird im Einstellungs-Fenster angezeigt.
 - **Tray-Icon** mit Statusfarbe (grün = aktuell, blau = synchronisiert,
   rot = Fehler) und Kontextmenü.
 - **Natives Einstellungs-Fenster** mit Datei-Browser zum Auswählen der
@@ -100,6 +104,27 @@ ersten Start wird ein XDG-Autostart-Eintrag unter
 Programm-Pfad). Abschalten oder wieder aktivieren lässt sich das jederzeit über
 den Schalter **„Beim Anmelden automatisch starten"** im Einstellungs-Fenster.
 
+## Automatische Updates
+
+Die AppImage kann sich selbst aktualisieren. Der Dienst prüft **beim Start** und
+danach in Abständen die
+[GitHub-Releases](https://github.com/tokajer/gdrive-sync/releases) des Projekts:
+
+- Ist eine neuere Version verfügbar, erscheint im Einstellungs-Fenster ein
+  Hinweis mit Button **„Jetzt aktualisieren"** und eine Desktop-Benachrichtigung.
+- Beim Aktualisieren wird das passende `*.AppImage`-Asset heruntergeladen und die
+  laufende Datei **atomar ersetzt**; anschließend genügt ein Klick auf
+  **„Neu starten"**.
+- Mit der Option **„Vorabversionen"** werden auch als *Prerelease* markierte
+  Releases einbezogen.
+
+Die **angezeigte Version** wird beim Bau aus dem Git-Tag gesetzt
+(`-ldflags -X main.version=…`; im GitHub-Build der getaggte Release). Lokale
+Builds ohne Tag melden sich als **`local-dev-build`** und bieten kein
+Selbstupdate (nur die AppImage-Version kann sich ersetzen).
+
+Abschalten: `update_check_disabled: true` in der `config.yaml`.
+
 ## Voraussetzungen zur Laufzeit
 
 - **FUSE 3** (`fusermount3`) für den Stream-Modus – auf den meisten Distributionen
@@ -141,10 +166,12 @@ Alle Einstellungen liegen unter `~/.config/gdrive-sync/`:
 Wichtige Felder in `config.yaml`:
 
 ```yaml
-sync_mode: stream          # "stream" oder "mirror"
-conflict_mode: manual      # "manual" (Standard) oder "auto"
-mirror_interval_sec: 300   # Polling-Intervall im Mirror-Modus (Sekunden)
-autostart_disabled: false  # true = kein Autostart beim Anmelden
+sync_mode: stream            # "stream" oder "mirror"
+conflict_mode: manual        # "manual" (Standard) oder "auto"
+mirror_interval_sec: 300     # Polling-Intervall im Mirror-Modus (Sekunden)
+autostart_disabled: false    # true = kein Autostart beim Anmelden
+update_prerelease: false     # true = auch Vorabversionen (Prereleases) anbieten
+update_check_disabled: false # true = keine automatische Update-Prüfung
 ```
 
 Laufzeitdaten liegen unter `~/.local/state/gdrive-sync/` (bzw. `$XDG_STATE_HOME`):
@@ -167,6 +194,7 @@ internal/webui       lokaler Steuer-Server (127.0.0.1) + eingebettete Oberfläch
 internal/window      natives Einstellungs-Fenster (WebKitGTK via dlopen, ohne Dev-Header)
 internal/tray        Tray-Icon über DBus StatusNotifierItem (ohne GTK/cgo)
 internal/notify      Desktop-Benachrichtigungen über DBus
+internal/updater     Selbstupdate über GitHub-Releases (Check, Download, Austausch)
 internal/logbuf      In-Memory-Ringpuffer für das Protokoll in der Oberfläche
 internal/logfile     Tages-rotierende Logdatei mit 7-Tage-Aufbewahrung
 packaging/           AppRun, Desktop-File, Icon

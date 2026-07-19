@@ -107,6 +107,24 @@
     </div>
   </div>
 
+  <!-- UPDATE -->
+  <div class="card" id="updateCard">
+    <div class="row">
+      <span class="badge">Version&nbsp;<b id="curVer">–</b></span>
+      <span id="updBadge" class="pill hidden clickable" style="border-color:var(--accent);color:var(--accent)" onclick="openUpdate()"></span>
+      <span class="spacer"></span>
+      <button id="updCheck" style="padding:4px 10px">Nach Updates suchen</button>
+    </div>
+    <div id="updMsg" class="muted" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="updApply" class="primary hidden">Jetzt aktualisieren</button>
+      <button id="updRestart" class="primary hidden">Neu starten</button>
+      <a id="updLink" class="hidden" href="#" target="_blank" style="color:var(--accent);font-size:13px">Release-Details ↗</a>
+      <span class="spacer"></span>
+      <label class="off"><input type="checkbox" id="updPre"> Vorabversionen</label>
+    </div>
+  </div>
+
   <!-- LOGIN (shown when not configured) -->
   <div class="card hidden" id="loginCard">
     <h2>Anmeldung</h2>
@@ -377,8 +395,43 @@ $('#logRefresh').onclick = (e)=>{ e.stopPropagation(); loadLog(); };
 $('#logOnlyErr').onchange = loadLog;
 $('#logClear').onclick = async (e)=>{ e.stopPropagation(); if(confirm('Protokoll und Fehlerzähler zurücksetzen?')){ await post('/api/logs/clear'); loadLog(); refreshStatus(); } };
 
+// --- update panel ---
+async function loadUpdate(){
+  try {
+    const d = await api('/api/update');
+    $('#curVer').textContent = d.current || '–';
+    $('#updPre').checked = !!d.include_prerelease;
+    const canUpd = !!d.can_self_update, st = d.state;
+    $('#updApply').classList.add('hidden');
+    $('#updRestart').classList.add('hidden');
+    $('#updLink').classList.add('hidden');
+    $('#updBadge').classList.add('hidden');
+    $('#updCheck').disabled = (st==='downloading');
+    let msg = d.message || '';
+    if(st==='available'){
+      $('#updBadge').textContent = 'Neu: '+(d.tag||d.available);
+      $('#updBadge').classList.remove('hidden');
+      if(d.release_url && d.release_url!==''){ $('#updLink').href=d.release_url; $('#updLink').classList.remove('hidden'); }
+      if(canUpd){ $('#updApply').classList.remove('hidden'); }
+      else { msg = 'Neue Version '+(d.tag||d.available)+' verfügbar – Selbstupdate nur in der AppImage-Version.'; }
+    } else if(st==='downloading'){
+      msg = 'Lade Update… '+(d.progress||0)+' %';
+    } else if(st==='ready'){
+      $('#updRestart').classList.remove('hidden');
+    }
+    $('#updMsg').textContent = msg;
+  } catch(e){}
+}
+function openUpdate(){ $('#updateCard').scrollIntoView({behavior:'smooth', block:'start'}); }
+$('#updCheck').onclick = async ()=>{ $('#updMsg').textContent='Suche nach Updates…'; try{ await post('/api/update/check'); }catch(e){} loadUpdate(); };
+$('#updApply').onclick = async ()=>{ if(confirm('Update herunterladen und installieren?')){ await post('/api/update/apply'); loadUpdate(); } };
+$('#updRestart').onclick = async ()=>{ if(confirm('Zum Abschließen des Updates jetzt neu starten?')){ await post('/api/update/restart'); $('#updMsg').textContent='Neustart…'; } };
+$('#updPre').onchange = async ()=>{ await post('/api/update/prerelease',{on:$('#updPre').checked}); $('#updMsg').textContent='Prüfe…'; setTimeout(loadUpdate, 800); };
+
 // init
 refreshStatus();
+loadUpdate();
+setInterval(loadUpdate, 5000);
 setInterval(refreshStatus, 2500);
 setInterval(()=>{ if(logOpen) loadLog(); }, 4000);
 setTimeout(async ()=>{ const d = await api('/api/status'); if(d.configured && d.status.mode==='stream') browse(''); }, 400);

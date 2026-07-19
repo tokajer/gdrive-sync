@@ -16,6 +16,7 @@ import (
 	"gdrive-sync/internal/config"
 	"gdrive-sync/internal/logbuf"
 	"gdrive-sync/internal/manager"
+	"gdrive-sync/internal/updater"
 	"gdrive-sync/internal/window"
 )
 
@@ -24,11 +25,13 @@ var indexHTML []byte
 
 // Server is the settings web server.
 type Server struct {
-	mgr  *manager.Manager
-	cfg  *config.Config
-	logs *logbuf.Buffer
-	addr string
-	log  func(string, ...any)
+	mgr     *manager.Manager
+	cfg     *config.Config
+	logs    *logbuf.Buffer
+	upd     *updater.Updater
+	restart func()
+	addr    string
+	log     func(string, ...any)
 
 	mu          sync.Mutex
 	loginActive bool
@@ -36,14 +39,17 @@ type Server struct {
 	loginErr    string
 }
 
-// New creates a settings server bound to 127.0.0.1 on the config's WebPort.
-func New(mgr *manager.Manager, cfg *config.Config, logs *logbuf.Buffer) *Server {
+// New creates a settings server bound to 127.0.0.1 on the config's WebPort. upd
+// and restart may be nil (self-update simply stays unavailable).
+func New(mgr *manager.Manager, cfg *config.Config, logs *logbuf.Buffer, upd *updater.Updater, restart func()) *Server {
 	return &Server{
-		mgr:  mgr,
-		cfg:  cfg,
-		logs: logs,
-		addr: fmt.Sprintf("127.0.0.1:%d", cfg.WebPort),
-		log:  logs.Logf,
+		mgr:     mgr,
+		cfg:     cfg,
+		logs:    logs,
+		upd:     upd,
+		restart: restart,
+		addr:    fmt.Sprintf("127.0.0.1:%d", cfg.WebPort),
+		log:     logs.Logf,
 	}
 }
 
@@ -72,6 +78,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/open-logs", s.handleOpenLogs)
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
+	mux.HandleFunc("/api/update", s.handleUpdate)
+	mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
+	mux.HandleFunc("/api/update/prerelease", s.handleUpdatePrerelease)
+	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -365,4 +376,72 @@ func (s *Server) handleLogsClear(w http.ResponseWriter, r *http.Request) {
 	s.logs.Clear()
 	s.mgr.ResetErrors()
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.upd == nil {
+		writeJSON(w, map[string]any{"state": "unsupported", "can_self_update": false})
+		return
+	}
+	writeJSON(w, s.upd.Status())
+}
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if s.upd == nil {
+		http.Error(w, "Updater nicht verfügbar", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	_, _ = s.upd.Check(ctx)
+	writeJSON(w, s.upd.Status())
+}
+
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if s.upd == nil {
+		http.Error(w, "Updater nicht verfügbar", http.StatusServiceUnavailable)
+		return
+	}
+	// Download + replace can take a while; run in the background and let the UI
+	// poll /api/update for progress and the final state.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		_ = s.upd.Apply(ctx)
+	}()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdatePrerelease(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.cfg.UpdatePrerelease = body.On
+	if err := s.cfg.Save(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if s.upd != nil {
+		s.upd.SetIncludePrerelease(body.On)
+		// Re-check so the UI reflects the new selection immediately.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = s.upd.Check(ctx)
+		}()
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
+	if s.restart == nil {
+		http.Error(w, "Neustart nicht verfügbar", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+	go s.restart()
 }

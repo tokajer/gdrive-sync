@@ -22,11 +22,14 @@ import (
 	"gdrive-sync/internal/manager"
 	"gdrive-sync/internal/notify"
 	"gdrive-sync/internal/tray"
+	"gdrive-sync/internal/updater"
 	"gdrive-sync/internal/webui"
 	"gdrive-sync/internal/window"
 )
 
-const version = "0.1.0"
+// version is injected at build time via -ldflags "-X main.version=<tag>".
+// Local builds keep the default so they are clearly identifiable.
+var version = "local-dev-build"
 
 func main() {
 	log.SetFlags(log.Ltime)
@@ -118,7 +121,28 @@ func runDaemon() {
 
 	mgr.Start(ctx)
 
-	web := webui.New(mgr, cfg, logs)
+	// Self-update (AppImage builds): check GitHub releases, and let the user
+	// apply an update with one click from the settings window.
+	upd := updater.New(version, cfg.UpdatePrerelease, logf)
+	restart := func() {
+		exe := os.Getenv("APPIMAGE")
+		if exe == "" {
+			if e, err := os.Executable(); err == nil {
+				exe = e
+			}
+		}
+		if exe != "" {
+			// Relaunch after a short delay so the old daemon releases the port
+			// and unmounts first.
+			_ = exec.Command("sh", "-c", fmt.Sprintf("sleep 2; exec %q run", exe)).Start()
+		}
+		cancel()
+	}
+	if !cfg.UpdateCheckDisabled && upd.Status().CanSelfUpdate {
+		go runUpdateChecks(ctx, upd, notifier, logf)
+	}
+
+	web := webui.New(mgr, cfg, logs, upd, restart)
 
 	// Tray icon (best-effort; the daemon runs fine without it).
 	go func() {
@@ -152,6 +176,39 @@ func runDaemon() {
 	}
 	mgr.Shutdown()
 	log.Println("Beendet.")
+}
+
+// runUpdateChecks checks for updates shortly after start and then periodically,
+// notifying the user once per newly discovered version.
+func runUpdateChecks(ctx context.Context, upd *updater.Updater, notifier notify.Notifier, logf func(string, ...any)) {
+	if waitOrDone(ctx, 4*time.Second) {
+		return
+	}
+	var lastNotified string
+	for {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		rel, err := upd.Check(cctx)
+		cancel()
+		if err != nil {
+			logf("Update-Prüfung fehlgeschlagen: %v", err)
+		} else if rel != nil && rel.Version != lastNotified {
+			lastNotified = rel.Version
+			notifier.Notify("Google Drive Sync", "Update verfügbar: "+rel.Tag+" – im Einstellungs-Fenster installieren")
+		}
+		if waitOrDone(ctx, 6*time.Hour) {
+			return
+		}
+	}
+}
+
+// waitOrDone sleeps for d, returning true if ctx was cancelled first.
+func waitOrDone(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // writeStatusFile atomically writes the current status to status.json so

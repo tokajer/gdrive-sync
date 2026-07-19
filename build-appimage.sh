@@ -22,9 +22,22 @@ esac
 
 mkdir -p "$BUILD" "$DIST"
 
+# Version bestimmen: explizit via $VERSION, sonst der Git-Tag beim GitHub-Build
+# (GITHUB_REF_TYPE=tag), sonst `git describe`, sonst local-dev-build.
+if [ -z "${VERSION:-}" ]; then
+  if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
+    VERSION="$GITHUB_REF_NAME"
+  else
+    VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo local-dev-build)"
+  fi
+fi
+echo ">> Version: $VERSION"
+
 echo ">> Baue gdrive-sync (Go)…"
 # cgo wird für das native Einstellungs-Fenster (WebKitGTK via dlopen) benötigt.
-CGO_ENABLED=1 "$GO" build -trimpath -ldflags "-s -w" -o "$BUILD/gdrive-sync" ./cmd/gdrive-sync
+CGO_ENABLED=1 "$GO" build -trimpath \
+  -ldflags "-s -w -X main.version=${VERSION}" \
+  -o "$BUILD/gdrive-sync" ./cmd/gdrive-sync
 
 # --- rclone ---
 RCLONE_BIN="${RCLONE_BIN:-$BUILD/rclone}"
