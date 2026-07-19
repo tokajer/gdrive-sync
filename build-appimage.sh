@@ -23,7 +23,8 @@ esac
 mkdir -p "$BUILD" "$DIST"
 
 echo ">> Baue gdrive-sync (Go)…"
-CGO_ENABLED=0 "$GO" build -trimpath -ldflags "-s -w" -o "$BUILD/gdrive-sync" ./cmd/gdrive-sync
+# cgo wird für das native Einstellungs-Fenster (WebKitGTK via dlopen) benötigt.
+CGO_ENABLED=1 "$GO" build -trimpath -ldflags "-s -w" -o "$BUILD/gdrive-sync" ./cmd/gdrive-sync
 
 # --- rclone ---
 RCLONE_BIN="${RCLONE_BIN:-$BUILD/rclone}"

@@ -21,6 +21,7 @@ import (
 	"gdrive-sync/internal/notify"
 	"gdrive-sync/internal/tray"
 	"gdrive-sync/internal/webui"
+	"gdrive-sync/internal/window"
 )
 
 const version = "0.1.0"
@@ -36,8 +37,8 @@ func main() {
 		runDaemon()
 	case "login":
 		cliLogin()
-	case "open", "ui":
-		openSettings()
+	case "open", "ui", "window", "settings":
+		openWindowCmd()
 	case "status":
 		cliStatus()
 	case "version", "--version", "-v":
@@ -51,9 +52,9 @@ func usage() {
 	fmt.Print(`gdrive-sync – Google-Drive-Synchronisation
 
 Verwendung:
-  gdrive-sync [run]     Daemon mit Tray-Icon und Einstellungs-UI starten (Standard)
+  gdrive-sync [run]     Daemon mit Tray-Icon und Einstellungs-Fenster starten (Standard)
   gdrive-sync login     Google-Konto in der Konsole verbinden (headless)
-  gdrive-sync open      Einstellungs-UI im Browser öffnen
+  gdrive-sync open      Einstellungs-Fenster öffnen
   gdrive-sync status    Aktuellen Status anzeigen
   gdrive-sync version   Version anzeigen
 `)
@@ -75,7 +76,7 @@ func runDaemon() {
 	// its settings UI and exit (mimics clicking the app icon again).
 	if instanceRunning(cfg.WebPort) {
 		log.Println("Läuft bereits – öffne Einstellungen.")
-		openURL(fmt.Sprintf("http://127.0.0.1:%d", cfg.WebPort))
+		spawnWindow()
 		return
 	}
 
@@ -101,7 +102,7 @@ func runDaemon() {
 			OpenFolder:   func() { openURL(cfg.LocalDir) },
 			SyncNow:      func() { mgr.SyncNow() },
 			TogglePause:  func() { togglePause(mgr) },
-			OpenSettings: func() { openURL(web.URL()) },
+			OpenSettings: func() { spawnWindow() },
 			Logout: func() {
 				c, cl := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cl()
@@ -114,12 +115,12 @@ func runDaemon() {
 		}
 	}()
 
-	// On first launch, open the settings UI so the user can sign in.
+	// On first launch, open the settings window so the user can sign in.
 	if !cfg.Configured() {
-		log.Printf("Noch nicht angemeldet – öffne %s", web.URL())
-		go func() { time.Sleep(500 * time.Millisecond); openURL(web.URL()) }()
+		log.Println("Noch nicht angemeldet – öffne Einstellungs-Fenster")
+		go func() { time.Sleep(900 * time.Millisecond); spawnWindow() }()
 	} else {
-		log.Printf("Einstellungen: %s", web.URL())
+		log.Printf("Bereit. Einstellungen über das Tray-Icon oder: %s open", exeName())
 	}
 
 	if err := web.ListenAndServe(ctx); err != nil {
@@ -153,9 +154,36 @@ func cliLogin() {
 	fmt.Println("Angemeldet als", cfg.AccountEmail)
 }
 
-func openSettings() {
+// openWindowCmd opens the settings UI in a native window (blocking).
+func openWindowCmd() {
 	cfg := loadOrExit()
-	openURL(fmt.Sprintf("http://127.0.0.1:%d", cfg.WebPort))
+	url := fmt.Sprintf("http://127.0.0.1:%d", cfg.WebPort)
+	if err := window.Open("Google Drive Sync", url); err != nil {
+		log.Printf("Fenster konnte nicht geöffnet werden: %v", err)
+		os.Exit(1)
+	}
+}
+
+// spawnWindow launches the settings window as a separate process so the daemon
+// keeps running and GTK stays isolated on its own main thread.
+func spawnWindow() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("Fenster-Start fehlgeschlagen: %v", err)
+		return
+	}
+	cmd := exec.Command(exe, "window")
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		log.Printf("Fenster-Start fehlgeschlagen: %v", err)
+	}
+}
+
+func exeName() string {
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return "gdrive-sync"
 }
 
 func cliStatus() {

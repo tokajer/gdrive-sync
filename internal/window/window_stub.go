@@ -1,0 +1,13 @@
+//go:build !cgo
+
+package window
+
+import "fmt"
+
+// Available reports that no native-window implementation is compiled in.
+const Available = false
+
+// Open is a no-op stub used when the binary is built without cgo.
+func Open(title, url string) error {
+	return fmt.Errorf("ohne cgo gebaut – natives Fenster nicht verfügbar")
+}

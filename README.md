@@ -2,7 +2,7 @@
 
 Ein Google-Drive-Synchronisationsclient für Linux – funktional angelehnt an den
 Windows-Client von Google Drive. Er läuft als Hintergrunddienst mit **Tray-Icon**,
-bietet eine **lokale Einstellungs-Oberfläche im Browser** und wird als
+bietet ein **natives Einstellungs-Fenster** (WebKitGTK, kein Browser) und wird als
 **AppImage** ausgeliefert (eine Datei, keine Installation nötig).
 
 Als Sync-Engine dient das bewährte [rclone](https://rclone.org), das im AppImage
@@ -20,8 +20,8 @@ mitgeliefert wird.
   wie „Offline verfügbar machen" beim Windows-Client.
 - **Tray-Icon** mit Statusfarbe (grün = aktuell, blau = synchronisiert,
   rot = Fehler) und Kontextmenü.
-- **Einstellungs-UI** im Browser mit Datei-Browser zum Auswählen der
-  Offline-Ordner.
+- **Natives Einstellungs-Fenster** mit Datei-Browser zum Auswählen der
+  Offline-Ordner (nutzt das im System vorhandene WebKitGTK, kein Web-Browser).
 - **Desktop-Benachrichtigungen** bei wichtigen Ereignissen.
 - **Automatischer Neustart** des Mounts / erneuter Abgleich bei Verbindungs­abbruch.
 
@@ -51,16 +51,16 @@ chmod +x Google_Drive_Sync-x86_64.AppImage
 ./Google_Drive_Sync-x86_64.AppImage
 ```
 
-Beim ersten Start öffnet sich die Einstellungs-Seite im Browser. Dort auf
-**„Bei Google anmelden"** klicken – es öffnet sich ein Browser-Fenster für die
-Google-Anmeldung. Danach Modus wählen und im Stream-Modus optional Ordner als
-„offline" markieren.
+Beim ersten Start öffnet sich das Einstellungs-Fenster. Dort auf
+**„Bei Google anmelden"** klicken – für die Google-Anmeldung selbst öffnet sich
+einmalig der Standardbrowser (OAuth). Danach Modus wählen und im Stream-Modus
+optional Ordner als „offline" markieren.
 
 Weitere Kommandos:
 
 ```bash
 ./Google_Drive_Sync-x86_64.AppImage login    # Anmeldung in der Konsole (headless)
-./Google_Drive_Sync-x86_64.AppImage open     # Einstellungen im Browser öffnen
+./Google_Drive_Sync-x86_64.AppImage open     # Einstellungs-Fenster öffnen
 ./Google_Drive_Sync-x86_64.AppImage status   # Status ausgeben
 ```
 
@@ -76,10 +76,14 @@ das mitgelieferte Desktop-File (`packaging/gdrive-sync.desktop`) nach
 
 - **FUSE 3** (`fusermount3`) für den Stream-Modus – auf den meisten Distributionen
   vorinstalliert.
+- **WebKitGTK** (`libwebkit2gtk-4.1`) für das Einstellungs-Fenster – auf den
+  meisten Desktops vorhanden. Fehlt es, läuft der Dienst weiter; das Fenster kann
+  dann nicht geöffnet werden (die HTTP-Steuerung auf 127.0.0.1 bleibt aber aktiv).
 - **Tray-Icon:** Es wird ein *StatusNotifierItem*-Host benötigt. KDE Plasma, XFCE,
   Cinnamon u. a. bringen das mit. Unter **GNOME** ist die Erweiterung
   *AppIndicator and KStatusNotifierItem Support* nötig. Ohne Tray-Host läuft der
-  Dienst trotzdem – gesteuert wird dann über die Einstellungs-UI im Browser.
+  Dienst trotzdem – das Einstellungs-Fenster erreichst du dann über
+  `gdrive-sync open`.
 
 ## Eigene Google-OAuth-Zugangsdaten (später)
 
@@ -114,7 +118,8 @@ cmd/gdrive-sync      Einstiegspunkt (Daemon, CLI, Single-Instance)
 internal/config      Laden/Speichern der YAML-Konfiguration
 internal/rclone      rclone-Wrapper (Login, mount, bisync, RC-API, Listing)
 internal/manager     Sync-Manager: Modus-Steuerung, Status, Offline-Pinning
-internal/webui       Einstellungs-Webserver (127.0.0.1) + eingebettete Oberfläche
+internal/webui       lokaler Steuer-Server (127.0.0.1) + eingebettete Oberfläche
+internal/window      natives Einstellungs-Fenster (WebKitGTK via dlopen, ohne Dev-Header)
 internal/tray        Tray-Icon über DBus StatusNotifierItem (ohne GTK/cgo)
 internal/notify      Desktop-Benachrichtigungen über DBus
 packaging/           AppRun, Desktop-File, Icon
