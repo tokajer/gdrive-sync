@@ -161,8 +161,10 @@ func (c *Client) MountArgs(mountpoint, rcAddr, cacheDir string) []string {
 		"--checkers", "16",
 		"--vfs-fast-fingerprint",
 		"--use-mmap",
-		// Control API for status/refresh + POSIX perms.
-		"--rc", "--rc-addr", rcAddr, "--rc-no-auth",
+		// Control API for status/refresh + POSIX perms. The RC credentials are
+		// passed via RCLONE_RC_USER/RCLONE_RC_PASS in the process environment
+		// (see manager.startProc) so they do not show up in the process list.
+		"--rc", "--rc-addr", rcAddr,
 		"--file-perms", "0644",
 		"--dir-perms", "0755",
 	)

@@ -5,6 +5,8 @@ package manager
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +51,8 @@ type Manager struct {
 	cfg      *config.Config
 	rc       *rclone.Client
 	rcAddr   string
+	rcUser   string
+	rcPass   string
 	ctl      *rclone.RC
 	cacheDir string
 	notifier notify.Notifier
@@ -74,11 +78,20 @@ func New(cfg *config.Config, notifier notify.Notifier, logf func(string, ...any)
 		logf = func(string, ...any) {}
 	}
 	rcAddr := fmt.Sprintf("127.0.0.1:%d", cfg.WebPort+1)
+	// Per-run random credentials for the mount's RC API: without them any local
+	// process (or a web page via CSRF) could drive the rclone control server.
+	rcPass, err := randomSecret()
+	if err != nil {
+		return nil, fmt.Errorf("RC-Zugangsdaten konnten nicht erzeugt werden: %w", err)
+	}
+	rcUser := "gdrive-sync"
 	m := &Manager{
 		cfg:         cfg,
 		rc:          rc,
 		rcAddr:      rcAddr,
-		ctl:         rclone.NewRC(rcAddr),
+		rcUser:      rcUser,
+		rcPass:      rcPass,
+		ctl:         rclone.NewRC(rcAddr, rcUser, rcPass),
 		cacheDir:    cacheDir(),
 		notifier:    notifier,
 		logf:        logf,
@@ -93,6 +106,15 @@ func New(cfg *config.Config, notifier notify.Notifier, logf func(string, ...any)
 		},
 	}
 	return m, nil
+}
+
+// randomSecret returns 32 hex characters from a cryptographic source.
+func randomSecret() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func cacheDir() string {

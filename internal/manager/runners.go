@@ -273,6 +273,13 @@ func (m *Manager) waitMountReady(ctx context.Context, timeout time.Duration) boo
 // returns the command plus a channel that receives its exit error.
 func (m *Manager) startProc(args []string, tag string) (*exec.Cmd, chan error) {
 	cmd := exec.Command(m.rc.Bin(), args...)
+	// RC credentials via environment (rclone reads RCLONE_<FLAG> for any flag)
+	// instead of argv, so they are not visible in the process list. Harmless for
+	// runs without --rc (bisync).
+	cmd.Env = append(os.Environ(),
+		"RCLONE_RC_USER="+m.rcUser,
+		"RCLONE_RC_PASS="+m.rcPass,
+	)
 	stdout, err := cmd.StdoutPipe()
 	if err == nil {
 		cmd.Stderr = cmd.Stdout

@@ -12,12 +12,16 @@ import (
 // RC talks to a running `rclone mount --rc` control server.
 type RC struct {
 	addr string
+	user string
+	pass string
 	http *http.Client
 }
 
-// NewRC returns a control client for the given "host:port" address.
-func NewRC(addr string) *RC {
-	return &RC{addr: addr, http: &http.Client{Timeout: 30 * time.Second}}
+// NewRC returns a control client for the given "host:port" address,
+// authenticating with the given credentials (matching the mount's
+// --rc-user/--rc-pass).
+func NewRC(addr, user, pass string) *RC {
+	return &RC{addr: addr, user: user, pass: pass, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
 func (r *RC) call(ctx context.Context, path string, in map[string]any) (map[string]any, error) {
@@ -28,6 +32,9 @@ func (r *RC) call(ctx context.Context, path string, in map[string]any) (map[stri
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if r.user != "" {
+		req.SetBasicAuth(r.user, r.pass)
+	}
 	resp, err := r.http.Do(req)
 	if err != nil {
 		return nil, err

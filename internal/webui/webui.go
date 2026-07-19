@@ -56,33 +56,69 @@ func New(mgr *manager.Manager, cfg *config.Config, logs *logbuf.Buffer, upd *upd
 // URL returns the address the UI is reachable at.
 func (s *Server) URL() string { return "http://" + s.addr }
 
+// guard wraps a handler with the checks that keep the loopback-only API safe
+// from the browser: the Host header must be our own loopback address (blocks
+// DNS-rebinding pages whose scripts would otherwise be same-origin), a present
+// Origin header must be the UI itself (blocks cross-site fetch/form POSTs, which
+// always carry one), and mutating endpoints accept only POST (blocks CSRF via
+// <img>/<script>/link GETs, which never carry an Origin header).
+func (s *Server) guard(mutating bool, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.hostAllowed(r.Host) {
+			http.Error(w, "ungültiger Host", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && !s.originAllowed(o) {
+			http.Error(w, "ungültiger Origin", http.StatusForbidden)
+			return
+		}
+		if mutating && r.Method != http.MethodPost {
+			http.Error(w, "nur POST erlaubt", http.StatusMethodNotAllowed)
+			return
+		}
+		h(w, r)
+	}
+}
+
+func (s *Server) hostAllowed(host string) bool {
+	return host == s.addr || host == fmt.Sprintf("localhost:%d", s.cfg.WebPort)
+}
+
+func (s *Server) originAllowed(origin string) bool {
+	return origin == "http://"+s.addr || origin == fmt.Sprintf("http://localhost:%d", s.cfg.WebPort)
+}
+
 // ListenAndServe starts the HTTP server, blocking until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/mode", s.handleMode)
-	mux.HandleFunc("/api/conflict-mode", s.handleConflictMode)
-	mux.HandleFunc("/api/conflicts", s.handleConflicts)
-	mux.HandleFunc("/api/conflict-resolve", s.handleConflictResolve)
-	mux.HandleFunc("/api/autostart", s.handleAutostart)
-	mux.HandleFunc("/api/local-dir", s.handleLocalDir)
-	mux.HandleFunc("/api/sync-now", s.handleSyncNow)
-	mux.HandleFunc("/api/pause", s.handlePause)
-	mux.HandleFunc("/api/login", s.handleLogin)
-	mux.HandleFunc("/api/login-status", s.handleLoginStatus)
-	mux.HandleFunc("/api/logout", s.handleLogout)
-	mux.HandleFunc("/api/browse", s.handleBrowse)
-	mux.HandleFunc("/api/offline", s.handleOffline)
-	mux.HandleFunc("/api/open", s.handleOpen)
-	mux.HandleFunc("/api/open-logs", s.handleOpenLogs)
-	mux.HandleFunc("/api/logs", s.handleLogs)
-	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
-	mux.HandleFunc("/api/update", s.handleUpdate)
-	mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
-	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
-	mux.HandleFunc("/api/update/prerelease", s.handleUpdatePrerelease)
-	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
+	// get: read-only endpoints; post: state-changing, POST-only.
+	get := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.guard(false, h)) }
+	post := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.guard(true, h)) }
+
+	get("/", s.handleIndex)
+	get("/api/status", s.handleStatus)
+	post("/api/mode", s.handleMode)
+	post("/api/conflict-mode", s.handleConflictMode)
+	get("/api/conflicts", s.handleConflicts)
+	post("/api/conflict-resolve", s.handleConflictResolve)
+	post("/api/autostart", s.handleAutostart)
+	post("/api/local-dir", s.handleLocalDir)
+	post("/api/sync-now", s.handleSyncNow)
+	post("/api/pause", s.handlePause)
+	post("/api/login", s.handleLogin)
+	get("/api/login-status", s.handleLoginStatus)
+	post("/api/logout", s.handleLogout)
+	get("/api/browse", s.handleBrowse)
+	post("/api/offline", s.handleOffline)
+	post("/api/open", s.handleOpen)
+	post("/api/open-logs", s.handleOpenLogs)
+	get("/api/logs", s.handleLogs)
+	post("/api/logs/clear", s.handleLogsClear)
+	get("/api/update", s.handleUpdate)
+	post("/api/update/check", s.handleUpdateCheck)
+	post("/api/update/apply", s.handleUpdateApply)
+	post("/api/update/prerelease", s.handleUpdatePrerelease)
+	post("/api/update/restart", s.handleUpdateRestart)
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
