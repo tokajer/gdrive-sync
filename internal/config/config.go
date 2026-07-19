@@ -21,6 +21,17 @@ const (
 	ModeMirror SyncMode = "mirror"
 )
 
+// Conflict resolution strategies for mirror mode.
+const (
+	// ConflictAuto resolves conflicts automatically: the newest file wins, the
+	// cloud wins when the two sides cannot be reconciled, and the losing copy is
+	// kept as a dated backup.
+	ConflictAuto = "auto"
+	// ConflictManual keeps both versions of a conflicting file so the user can
+	// decide in the UI which one wins.
+	ConflictManual = "manual"
+)
+
 // GoogleCreds holds an optional custom OAuth client. When both fields are
 // empty rclone's built-in Drive credentials are used. Filling these in is the
 // single change needed to move to a dedicated Google Cloud OAuth client later.
@@ -44,6 +55,11 @@ type Config struct {
 	OfflinePaths []string `yaml:"offline_paths"`
 	// MirrorIntervalSec is how often mirror mode reconciles, in seconds.
 	MirrorIntervalSec int `yaml:"mirror_interval_sec"`
+	// ConflictMode is how mirror-mode sync conflicts are handled
+	// ("auto" or "manual"). Empty is treated as "auto".
+	ConflictMode string `yaml:"conflict_mode"`
+	// AutostartDisabled turns off the "start on login" autostart entry when set.
+	AutostartDisabled bool `yaml:"autostart_disabled"`
 	// WebPort is the local settings-UI port (127.0.0.1 only).
 	WebPort int `yaml:"web_port"`
 	// Google holds optional custom OAuth credentials.
@@ -62,6 +78,7 @@ func Default() *Config {
 		LocalDir:          filepath.Join(home, "GoogleDrive"),
 		OfflinePaths:      []string{},
 		MirrorIntervalSec: 300,
+		ConflictMode:      ConflictManual,
 		WebPort:           45677,
 	}
 }
@@ -117,8 +134,15 @@ func Load() (*Config, error) {
 	if cfg.RemoteName == "" {
 		cfg.RemoteName = "gdrive"
 	}
+	if cfg.ConflictMode == "" {
+		cfg.ConflictMode = ConflictManual
+	}
 	return cfg, nil
 }
+
+// AutostartEnabled reports whether the app should register itself to start on
+// login.
+func (c *Config) AutostartEnabled() bool { return !c.AutostartDisabled }
 
 // Save atomically writes the config to disk.
 func (c *Config) Save() error {
@@ -175,4 +199,44 @@ func RcloneConfPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "rclone.conf"), nil
+}
+
+// StateDir returns the runtime-state directory (status file, logs), creating it
+// if necessary. Follows $XDG_STATE_HOME, defaulting to ~/.local/state.
+func StateDir() (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	dir := filepath.Join(base, "gdrive-sync")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// StatusPath returns the path of the JSON status file used for monitoring.
+func StatusPath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "status.json"), nil
+}
+
+// LogDir returns the directory holding rotated log files, creating it.
+func LogDir() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	logs := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		return "", err
+	}
+	return logs, nil
 }

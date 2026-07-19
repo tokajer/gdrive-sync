@@ -31,16 +31,7 @@ func InstallDesktopEntry() error {
 		return err
 	}
 
-	// Prefer the outer AppImage path (stable across runs) over the executable,
-	// which for an AppImage points into a temporary mount that vanishes on exit.
-	exec := os.Getenv("APPIMAGE")
-	if exec == "" {
-		if e, err := os.Executable(); err == nil {
-			exec = e
-		} else {
-			exec = "gdrive-sync"
-		}
-	}
+	exec := appExecPath()
 
 	appDir := filepath.Join(data, "applications")
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
@@ -61,6 +52,59 @@ func InstallDesktopEntry() error {
 		"StartupNotify=false\n" +
 		"StartupWMClass=gdrive-sync\n"
 	return writeIfChanged(filepath.Join(appDir, "gdrive-sync.desktop"), []byte(entry))
+}
+
+// InstallAutostart registers (or removes) an XDG autostart entry so the daemon
+// starts automatically when the user logs in. When enabled is false any
+// existing entry is removed. It is idempotent and best-effort.
+func InstallAutostart(enabled bool) error {
+	cfgHome := os.Getenv("XDG_CONFIG_HOME")
+	if cfgHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		cfgHome = filepath.Join(home, ".config")
+	}
+	dir := filepath.Join(cfgHome, "autostart")
+	path := filepath.Join(dir, "gdrive-sync.desktop")
+
+	if !enabled {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	entry := "[Desktop Entry]\n" +
+		"Type=Application\n" +
+		"Name=Google Drive Sync\n" +
+		"Comment=Google Drive beim Anmelden synchronisieren\n" +
+		"Exec=\"" + appExecPath() + "\" run\n" +
+		"Icon=gdrive-sync\n" +
+		"Terminal=false\n" +
+		"Categories=Network;FileTransfer;\n" +
+		"StartupNotify=false\n" +
+		"StartupWMClass=gdrive-sync\n" +
+		"X-GNOME-Autostart-enabled=true\n" +
+		"X-GNOME-Autostart-Delay=5\n"
+	return writeIfChanged(path, []byte(entry))
+}
+
+// appExecPath returns the command used to launch the app. It prefers the outer
+// AppImage path (stable across runs) over the executable, which for an AppImage
+// points into a temporary mount that vanishes on exit.
+func appExecPath() string {
+	if p := os.Getenv("APPIMAGE"); p != "" {
+		return p
+	}
+	if e, err := os.Executable(); err == nil {
+		return e
+	}
+	return "gdrive-sync"
 }
 
 // writeIfChanged writes data to path only when it differs from the current

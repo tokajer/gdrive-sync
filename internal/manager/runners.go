@@ -55,25 +55,51 @@ func (m *Manager) runStream(ctx context.Context) {
 	}
 }
 
-// runMirror keeps a two-way-synced local copy using rclone bisync, on a timer
-// and on demand.
+// maxMirrorFailures is how many consecutive bisync failures trigger an
+// automatic full resync (auto-recovery).
+const maxMirrorFailures = 3
+
+// runMirror keeps a two-way-synced local copy using rclone bisync. It reconciles
+//   - on a timer (periodic remote polling),
+//   - on demand (SyncNow), and
+//   - immediately after local changes detected via inotify (watchMirror).
+//
+// After several consecutive failures it forces a full resync to recover, and it
+// cleans up stale locks left behind by crashed runs before every attempt.
 func (m *Manager) runMirror(ctx context.Context) {
 	local := m.cfg.LocalDir
 	if err := ensureDir(local); err != nil {
 		m.setState(StateError, "Sync-Ordner nicht nutzbar: "+err.Error())
 		return
 	}
+	workdir := filepath.Join(m.cacheDir, "bisync")
+	_ = os.MkdirAll(workdir, 0o700)
 	marker := filepath.Join(m.cacheDir, "bisync-init-"+sanitize(local))
 
+	// Real-time local watching: nudge the sync trigger on local changes.
+	go m.watchMirror(ctx, local)
+
+	failures := 0
 	for ctx.Err() == nil {
+		// Stale lock detection: drop locks older than the bisync --max-lock
+		// window, which can only come from a crashed/killed run.
+		m.cleanStaleLocks(workdir, 5*time.Minute)
+
+		recovering := failures >= maxMirrorFailures
 		first := !fileExists(marker)
-		if first {
+		resync := first || recovering
+
+		switch {
+		case recovering:
+			m.logf("Auto-Wiederherstellung: vollständiger Neuabgleich nach %d Fehlversuchen", failures)
+			m.setState(StateSyncing, "Auto-Wiederherstellung: vollständiger Neuabgleich…")
+		case first:
 			m.setState(StateSyncing, "Erstabgleich läuft (kann dauern)…")
-		} else {
+		default:
 			m.setState(StateSyncing, "Synchronisiere…")
 		}
 
-		cmd, done := m.startProc(m.rc.BisyncArgs(local, first), "bisync")
+		cmd, done := m.startProc(m.rc.BisyncArgs(local, workdir, m.cfg.ConflictMode, resync), "bisync")
 		var runErr error
 		select {
 		case <-ctx.Done():
@@ -84,27 +110,62 @@ func (m *Manager) runMirror(ctx context.Context) {
 		}
 
 		if runErr == nil {
-			if first {
+			if resync {
 				_ = os.WriteFile(marker, []byte("ok\n"), 0o644)
 			}
+			failures = 0
 			m.mu.Lock()
 			m.status.LastSync = time.Now()
 			m.mu.Unlock()
 			m.setState(StateIdle, "Auf dem neuesten Stand")
 		} else {
-			m.setState(StateError, "Synchronisierungsfehler – neuer Versuch folgt")
-			m.notifier.Notify("Google Drive Sync", "Synchronisierungsfehler – wird erneut versucht")
+			failures++
+			if failures >= maxMirrorFailures {
+				m.setState(StateError, "Wiederholte Fehler – Auto-Wiederherstellung beim nächsten Lauf")
+				m.notifier.Notify("Google Drive Sync", "Wiederholte Synchronisierungsfehler – automatische Wiederherstellung folgt")
+			} else {
+				m.setState(StateError, "Synchronisierungsfehler – neuer Versuch folgt")
+				m.notifier.Notify("Google Drive Sync", "Synchronisierungsfehler – wird erneut versucht")
+			}
 		}
 
-		interval := time.Duration(m.cfg.MirrorIntervalSec) * time.Second
-		if interval < 30*time.Second {
-			interval = 30 * time.Second
+		// Periodic remote polling. After a failure, retry sooner than the full
+		// interval so recovery does not stall.
+		wait := time.Duration(m.cfg.MirrorIntervalSec) * time.Second
+		if wait < 30*time.Second {
+			wait = 30 * time.Second
+		}
+		if runErr != nil && wait > 20*time.Second {
+			wait = 20 * time.Second
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-time.After(wait):
 		case <-m.syncTrigger:
+		}
+	}
+}
+
+// cleanStaleLocks removes bisync lock files in dir older than maxAge. rclone
+// renews its lock within --max-lock, so anything older is a leftover from a
+// process that crashed or was killed.
+func (m *Manager) cleanStaleLocks(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		if e.IsDir() || !strings.Contains(e.Name(), ".lck") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+			m.logf("Verwaiste Sperrdatei entfernt: %s", e.Name())
 		}
 	}
 }

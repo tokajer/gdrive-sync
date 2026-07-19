@@ -30,16 +30,17 @@ const (
 
 // Status is an immutable snapshot handed to observers.
 type Status struct {
-	State    State           `json:"state"`
-	Mode     config.SyncMode `json:"mode"`
-	Message  string          `json:"message"`
-	Account  string          `json:"account"`
-	LocalDir string          `json:"local_dir"`
-	Bytes    int64           `json:"bytes"`
-	Speed    float64         `json:"speed"`
-	Errors   int64           `json:"errors"`
-	LastSync time.Time       `json:"last_sync"`
-	Offline  []string        `json:"offline"`
+	State        State           `json:"state"`
+	Mode         config.SyncMode `json:"mode"`
+	ConflictMode string          `json:"conflict_mode"`
+	Message      string          `json:"message"`
+	Account      string          `json:"account"`
+	LocalDir     string          `json:"local_dir"`
+	Bytes        int64           `json:"bytes"`
+	Speed        float64         `json:"speed"`
+	Errors       int64           `json:"errors"`
+	LastSync     time.Time       `json:"last_sync"`
+	Offline      []string        `json:"offline"`
 }
 
 // Manager is the central controller. All exported methods are safe for
@@ -83,11 +84,12 @@ func New(cfg *config.Config, notifier notify.Notifier, logf func(string, ...any)
 		logf:        logf,
 		syncTrigger: make(chan struct{}, 1),
 		status: Status{
-			State:    StateDisconnected,
-			Mode:     cfg.Mode,
-			Account:  cfg.AccountEmail,
-			LocalDir: cfg.LocalDir,
-			Offline:  append([]string{}, cfg.OfflinePaths...),
+			State:        StateDisconnected,
+			Mode:         cfg.Mode,
+			ConflictMode: cfg.ConflictMode,
+			Account:      cfg.AccountEmail,
+			LocalDir:     cfg.LocalDir,
+			Offline:      append([]string{}, cfg.OfflinePaths...),
 		},
 	}
 	return m, nil
@@ -172,6 +174,26 @@ func (m *Manager) SetMode(mode config.SyncMode) error {
 	m.mu.Unlock()
 	m.broadcast()
 	if m.cfg.Configured() {
+		m.startMode()
+	}
+	return nil
+}
+
+// SetConflictMode switches how mirror-mode conflicts are resolved and restarts
+// mirror syncing so the new bisync flags take effect.
+func (m *Manager) SetConflictMode(mode string) error {
+	if mode != config.ConflictManual {
+		mode = config.ConflictAuto
+	}
+	m.cfg.ConflictMode = mode
+	if err := m.cfg.Save(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.status.ConflictMode = mode
+	m.mu.Unlock()
+	m.broadcast()
+	if m.cfg.Configured() && m.cfg.Mode == config.ModeMirror {
 		m.startMode()
 	}
 	return nil

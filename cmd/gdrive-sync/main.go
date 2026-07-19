@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 
 	"gdrive-sync/internal/config"
 	"gdrive-sync/internal/logbuf"
+	"gdrive-sync/internal/logfile"
 	"gdrive-sync/internal/manager"
 	"gdrive-sync/internal/notify"
 	"gdrive-sync/internal/tray"
@@ -72,10 +74,23 @@ func loadOrExit() *config.Config {
 func runDaemon() {
 	cfg := loadOrExit()
 
+	// Persist the daemon log to a day-rotating file with 7-day retention, in
+	// addition to stderr/journal. Best-effort: on failure we keep stderr only.
+	if dir, err := config.LogDir(); err == nil {
+		if lw, err := logfile.New(dir, 7); err == nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, lw))
+		}
+	}
+
 	// Register a user-scope .desktop file + icon so the Wayland compositor can
 	// show the app logo in the settings window's titlebar/taskbar (best-effort).
 	if err := window.InstallDesktopEntry(); err != nil {
 		log.Printf("Desktop-Integration nicht möglich: %v", err)
+	}
+
+	// Start on boot: register (or remove) the XDG autostart entry per config.
+	if err := window.InstallAutostart(cfg.AutostartEnabled()); err != nil {
+		log.Printf("Autostart-Eintrag nicht möglich: %v", err)
 	}
 
 	// Single-instance: if a daemon already answers on the web port, just open
@@ -97,6 +112,9 @@ func runDaemon() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// JSON status API: mirror every status change to status.json for monitoring.
+	mgr.Subscribe(func(s manager.Status) { writeStatusFile(s) })
 
 	mgr.Start(ctx)
 
@@ -134,6 +152,24 @@ func runDaemon() {
 	}
 	mgr.Shutdown()
 	log.Println("Beendet.")
+}
+
+// writeStatusFile atomically writes the current status to status.json so
+// external tooling can monitor the sync without talking to the HTTP API.
+func writeStatusFile(s manager.Status) {
+	path, err := config.StatusPath()
+	if err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
 }
 
 func togglePause(mgr *manager.Manager) {

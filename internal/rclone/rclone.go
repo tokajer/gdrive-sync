@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gdrive-sync/internal/config"
 )
@@ -168,19 +169,50 @@ func (c *Client) MountArgs(mountpoint, rcAddr, cacheDir string) []string {
 }
 
 // BisyncArgs builds the argument list for `rclone bisync` in mirror mode.
-// resync performs the initial full reconciliation and must be used on first run.
-func (c *Client) BisyncArgs(localDir string, resync bool) []string {
+//
+// Path1 is the Drive remote (the cloud), Path2 is the local directory, so any
+// "cloud wins" behaviour maps to Path1.
+//
+//   - workdir holds bisync's state and lock files (so we can clean up stale
+//     locks from crashed runs).
+//   - conflictMode "manual" keeps both versions of a conflicting file for the
+//     user to resolve; anything else means automatic resolution: newest wins,
+//     the losing copy is kept as a dated backup.
+//   - resync performs a full reconciliation (first run or auto-recovery); on an
+//     undecidable difference the cloud (Path1) wins.
+func (c *Client) BisyncArgs(localDir, workdir, conflictMode string, resync bool) []string {
 	args := append(c.base(),
 		"bisync", c.Remote(), localDir,
+		"--workdir", workdir,
 		"--create-empty-src-dirs",
+		// Recover from interruptions / less-serious errors without needing a
+		// manual --resync, and treat a stale lock as recoverable.
 		"--resilient",
-		"--conflict-resolve", "newer",
+		"--recover",
 		"--max-lock", "2m",
 		"--transfers", "8",
 		"-v",
 	)
+	if conflictMode == config.ConflictManual {
+		// Keep both sides renamed (…conflict1 = Drive, …conflict2 = local); the
+		// user picks a winner in the settings UI.
+		args = append(args,
+			"--conflict-resolve", "none",
+			"--conflict-loser", "num",
+			"--conflict-suffix", "conflict",
+		)
+	} else {
+		// Newest file wins; the losing copy is preserved as a dated backup.
+		args = append(args,
+			"--conflict-resolve", "newer",
+			"--conflict-loser", "pathname",
+			"--conflict-suffix", "conflict-"+time.Now().Format("2006-01-02"),
+		)
+	}
 	if resync {
-		args = append(args, "--resync")
+		// Full reconciliation. Path1 (the cloud) is authoritative when a
+		// difference cannot be decided otherwise.
+		args = append(args, "--resync", "--resync-mode", "path1")
 	}
 	return args
 }

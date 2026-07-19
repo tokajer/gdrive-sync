@@ -93,6 +93,7 @@
   <div class="card">
     <div class="row">
       <span class="badge"><span id="dot" class="dot disconnected"></span><span id="state">Wird geladen…</span></span>
+      <span id="conflictBadge" class="pill hidden clickable" style="border-color:var(--warn);color:var(--warn)" onclick="openConflicts()"></span>
       <span class="spacer"></span>
       <span id="account" class="muted"></span>
     </div>
@@ -132,6 +133,30 @@
       <span id="localDir" class="path"></span>
       <button id="btnChangeDir" style="padding:4px 10px">Ändern</button>
     </div>
+    <div class="row" style="margin-top:12px">
+      <label class="off"><input type="checkbox" id="autostart"> Beim Anmelden automatisch starten</label>
+    </div>
+  </div>
+
+  <!-- CONFLICT HANDLING (mirror mode only) -->
+  <div class="card hidden" id="conflictCard">
+    <h2>Konfliktbehandlung</h2>
+    <div class="modes">
+      <div class="mode" id="cmAuto" data-cmode="auto">
+        <b>Automatisch</b>
+        <span class="muted">Neuere Datei gewinnt, im Zweifel die Cloud. Die unterlegene Kopie bleibt als datierte Sicherung erhalten.</span>
+      </div>
+      <div class="mode" id="cmManual" data-cmode="manual">
+        <b>Manuell</b>
+        <span class="muted">Beide Versionen bleiben erhalten. Du entscheidest unten pro Datei, welche gewinnt.</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <b style="font-size:13px">Offene Konflikte</b>
+      <span class="spacer"></span>
+      <button id="conflictRefresh" style="padding:4px 10px">Aktualisieren</button>
+    </div>
+    <div id="conflictList" style="margin-top:10px"></div>
   </div>
 
   <!-- LOG -->
@@ -145,6 +170,7 @@
       <div class="row" style="margin-bottom:10px">
         <label class="off"><input type="checkbox" id="logOnlyErr"> nur Fehler</label>
         <span class="spacer"></span>
+        <button id="logOpen" style="padding:4px 10px">Logdateien öffnen</button>
         <button id="logRefresh" style="padding:4px 10px">Aktualisieren</button>
         <button id="logClear" style="padding:4px 10px">Löschen</button>
       </div>
@@ -196,10 +222,16 @@ async function refreshStatus(){
     $('#btnLogout').classList.toggle('hidden', !d.configured);
     $('#modeCard').classList.toggle('hidden', !d.configured);
     $('#offlineCard').classList.toggle('hidden', !d.configured || st.mode!=='stream');
+    $('#conflictCard').classList.toggle('hidden', !d.configured || st.mode!=='mirror');
 
     $('#localDir').textContent = st.local_dir;
     $('#modeStream').classList.toggle('active', st.mode==='stream');
     $('#modeMirror').classList.toggle('active', st.mode==='mirror');
+    $('#cmAuto').classList.toggle('active', st.conflict_mode!=='manual');
+    $('#cmManual').classList.toggle('active', st.conflict_mode==='manual');
+    $('#autostart').checked = !!d.autostart;
+    if(d.configured && st.mode==='mirror') loadConflicts();
+    else { lastConflictLoad = 0; updateConflictBadge(0); }
   } catch(e){ $('#state').textContent = 'Daemon nicht erreichbar'; }
 }
 
@@ -210,13 +242,57 @@ $('#btnPause').onclick = async ()=>{ const paused = $('#btnPause').textContent==
 $('#btnLogout').onclick = async ()=>{ if(confirm('Wirklich abmelden?')){ await post('/api/logout'); refreshStatus(); } };
 $('#btnChangeDir').onclick = async ()=>{ const p = prompt('Lokaler Ordner (voller Pfad):', $('#localDir').textContent); if(p){ await post('/api/local-dir',{path:p}); refreshStatus(); } };
 
-document.querySelectorAll('.mode').forEach(el => el.onclick = async ()=>{
+document.querySelectorAll('[data-mode]').forEach(el => el.onclick = async ()=>{
   const mode = el.dataset.mode;
   if(mode===cur.mode) return;
   await post('/api/mode',{mode});
   refreshStatus();
   if(mode==='stream') browse('');
 });
+
+// --- conflict handling ---
+document.querySelectorAll('[data-cmode]').forEach(el => el.onclick = async ()=>{
+  await post('/api/conflict-mode',{mode: el.dataset.cmode});
+  refreshStatus();
+});
+$('#autostart').onchange = ()=> post('/api/autostart',{on: $('#autostart').checked});
+$('#conflictRefresh').onclick = ()=>loadConflicts(true);
+
+const sideLabel = { cloud:'☁️ Cloud', local:'💻 Lokal', backup:'🗄 Sicherung' };
+let lastConflictLoad = 0;
+async function loadConflicts(force){
+  if(!cur.configured || cur.mode!=='mirror') return;
+  // Throttle the (recursive) scan unless the user forced a refresh.
+  const now = Date.now();
+  if(!force && now - lastConflictLoad < 8000) return;
+  lastConflictLoad = now;
+  try {
+    const d = await api('/api/conflicts');
+    const box = $('#conflictList'); box.innerHTML='';
+    const items = d.conflicts || [];
+    updateConflictBadge(items.length);
+    if(items.length===0){ box.innerHTML='<div class="muted">Keine offenen Konflikte.</div>'; return; }
+    const list = document.createElement('div'); list.className='list';
+    items.forEach(c=>{
+      const item=document.createElement('div'); item.className='item';
+      const name=document.createElement('div'); name.className='name';
+      name.innerHTML='📄 '+escapeHtml(c.path)+' <span class="pill">'+(sideLabel[c.side]||c.side)+'</span>';
+      const keep=document.createElement('button'); keep.textContent='Diese behalten'; keep.style.padding='4px 10px';
+      keep.onclick=async ()=>{ if(confirm('Diese Version behalten und die anderen Konfliktkopien entfernen?')){ await post('/api/conflict-resolve',{path:c.path, action:'keep'}); loadConflicts(true); } };
+      const del=document.createElement('button'); del.textContent='Löschen'; del.style.padding='4px 10px';
+      del.onclick=async ()=>{ if(confirm('Diese Kopie löschen?')){ await post('/api/conflict-resolve',{path:c.path, action:'delete'}); loadConflicts(true); } };
+      item.appendChild(name); item.appendChild(keep); item.appendChild(del);
+      list.appendChild(item);
+    });
+    box.appendChild(list);
+  } catch(e){}
+}
+function updateConflictBadge(n){
+  const b = $('#conflictBadge');
+  if(n>0){ b.textContent = n===1 ? '1 Konflikt' : n+' Konflikte'; b.classList.remove('hidden'); }
+  else { b.classList.add('hidden'); }
+}
+function openConflicts(){ $('#conflictCard').scrollIntoView({behavior:'smooth', block:'start'}); }
 
 // --- login ---
 $('#btnLogin').onclick = async ()=>{
@@ -296,6 +372,7 @@ async function loadLog(){
   });
 }
 $('#logHeader').onclick = ()=>toggleLog();
+$('#logOpen').onclick = (e)=>{ e.stopPropagation(); post('/api/open-logs'); };
 $('#logRefresh').onclick = (e)=>{ e.stopPropagation(); loadLog(); };
 $('#logOnlyErr').onchange = loadLog;
 $('#logClear').onclick = async (e)=>{ e.stopPropagation(); if(confirm('Protokoll und Fehlerzähler zurücksetzen?')){ await post('/api/logs/clear'); loadLog(); refreshStatus(); } };

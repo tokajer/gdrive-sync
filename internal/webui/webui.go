@@ -16,6 +16,7 @@ import (
 	"gdrive-sync/internal/config"
 	"gdrive-sync/internal/logbuf"
 	"gdrive-sync/internal/manager"
+	"gdrive-sync/internal/window"
 )
 
 //go:embed index.html
@@ -55,6 +56,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/mode", s.handleMode)
+	mux.HandleFunc("/api/conflict-mode", s.handleConflictMode)
+	mux.HandleFunc("/api/conflicts", s.handleConflicts)
+	mux.HandleFunc("/api/conflict-resolve", s.handleConflictResolve)
+	mux.HandleFunc("/api/autostart", s.handleAutostart)
 	mux.HandleFunc("/api/local-dir", s.handleLocalDir)
 	mux.HandleFunc("/api/sync-now", s.handleSyncNow)
 	mux.HandleFunc("/api/pause", s.handlePause)
@@ -64,6 +69,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browse", s.handleBrowse)
 	mux.HandleFunc("/api/offline", s.handleOffline)
 	mux.HandleFunc("/api/open", s.handleOpen)
+	mux.HandleFunc("/api/open-logs", s.handleOpenLogs)
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
 
@@ -105,6 +111,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"status":     st,
 		"configured": s.cfg.Configured(),
 		"web_url":    s.URL(),
+		"autostart":  s.cfg.AutostartEnabled(),
 	})
 }
 
@@ -121,6 +128,62 @@ func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
 		mode = config.ModeMirror
 	}
 	if err := s.mgr.SetMode(mode); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleConflictMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.SetConflictMode(body.Mode); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"conflicts": s.mgr.Conflicts()})
+}
+
+func (s *Server) handleConflictResolve(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path   string `json:"path"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.ResolveConflict(body.Path, body.Action); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAutostart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.cfg.AutostartDisabled = !body.On
+	if err := s.cfg.Save(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := window.InstallAutostart(body.On); err != nil {
+		s.log("Autostart konnte nicht aktualisiert werden: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -278,6 +341,19 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		_ = exec.Command("xdg-open", s.cfg.LocalDir).Start()
 	}()
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleOpenLogs opens the log directory in the system file manager.
+func (s *Server) handleOpenLogs(w http.ResponseWriter, r *http.Request) {
+	dir, err := config.LogDir()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	go func() {
+		_ = exec.Command("xdg-open", dir).Start()
+	}()
+	writeJSON(w, map[string]any{"ok": true, "path": dir})
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

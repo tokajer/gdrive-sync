@@ -15,9 +15,35 @@ mitgeliefert wird.
     Dateien werden bei Bedarf geladen. Spart Speicherplatz.
   - **Mirror (lokale Kopie):** Vollständige Zwei-Wege-Synchronisation eines
     Ordners – alles offline verfügbar.
+- **Bidirektionale Synchronisation:** Änderungen fließen in beide Richtungen –
+  lokal → Drive und Drive → lokal (Mirror-Modus, `rclone bisync`).
+- **Echtzeit-Überwachung lokaler Änderungen:** Ein nativer inotify-Watcher
+  erkennt lokale Änderungen sofort und stößt den Abgleich unmittelbar an
+  (entprellt), statt nur auf den Intervall-Timer zu warten.
+- **Periodisches Remote-Polling:** Ein Timer gleicht regelmäßig ab und erfasst so
+  auch Änderungen, die direkt in Google Drive gemacht wurden (Standard 5 min,
+  einstellbar).
+- **Konfliktbehandlung – automatisch oder manuell (in der Oberfläche wählbar):**
+  - **Automatisch:** Die neuere Datei gewinnt; im Zweifel gewinnt die Cloud. Die
+    unterlegene Kopie bleibt als **datierte Sicherung** erhalten.
+  - **Manuell** (Standard): Beide Versionen bleiben erhalten; die Oberfläche
+    listet alle offenen Konflikte, du entscheidest pro Datei
+    („Diese behalten" / „Löschen"). Ein Zähler-Badge an der Statusanzeige zeigt
+    offene Konflikte.
+- **Automatische Wiederherstellung (Auto-Recovery):** Nach mehreren
+  aufeinanderfolgenden Fehlversuchen wird automatisch ein vollständiger
+  Neuabgleich (`--resync`) ausgelöst.
+- **Erkennung verwaister Sperren:** Sperrdateien abgestürzter/abgebrochener Läufe
+  werden automatisch erkannt und entfernt.
 - **Offline verfügbar machen:** Im Stream-Modus lassen sich einzelne Ordner
   auswählen, die dauerhaft lokal vorgehalten und offline nutzbar bleiben –
   wie „Offline verfügbar machen" beim Windows-Client.
+- **JSON-Status-API:** Eine stets aktuelle `status.json` erlaubt einfaches
+  Monitoring von außen (zusätzlich zur HTTP-API auf 127.0.0.1).
+- **Protokoll mit Rotation:** Tägliche Logdateien mit 7-Tage-Aufbewahrung; alte
+  Dateien werden automatisch aufgeräumt.
+- **Autostart beim Anmelden:** Standardmäßig aktiv (XDG-Autostart), in der
+  Oberfläche abschaltbar.
 - **Tray-Icon** mit Statusfarbe (grün = aktuell, blau = synchronisiert,
   rot = Fehler) und Kontextmenü.
 - **Natives Einstellungs-Fenster** mit Datei-Browser zum Auswählen der
@@ -68,9 +94,11 @@ Ein erneuter Start bei bereits laufendem Dienst öffnet einfach die Einstellunge
 
 ### Autostart
 
-Die AppImage einmal ausführen und im Dateimanager als Autostart eintragen, oder
-das mitgelieferte Desktop-File (`packaging/gdrive-sync.desktop`) nach
-`~/.config/autostart/` kopieren und `Exec=` auf den AppImage-Pfad anpassen.
+Der Dienst richtet sich **automatisch** für den Start beim Anmelden ein: Beim
+ersten Start wird ein XDG-Autostart-Eintrag unter
+`~/.config/autostart/gdrive-sync.desktop` angelegt (verweist auf den AppImage-/
+Programm-Pfad). Abschalten oder wieder aktivieren lässt sich das jederzeit über
+den Schalter **„Beim Anmelden automatisch starten"** im Einstellungs-Fenster.
 
 ## Voraussetzungen zur Laufzeit
 
@@ -106,10 +134,26 @@ Typ „Desktop", Drive-API aktivieren).
 
 Alle Einstellungen liegen unter `~/.config/gdrive-sync/`:
 
-- `config.yaml` – App-Einstellungen (Modus, Ordner, Offline-Pfade, Port, OAuth)
+- `config.yaml` – App-Einstellungen (Modus, Ordner, Offline-Pfade, Intervall,
+  Konfliktmodus, Autostart, Port, OAuth)
 - `rclone.conf` – rclone-Remote inkl. OAuth-Token
 
-Der VFS-Cache (Stream-Modus) liegt unter `~/.cache/gdrive-sync/`.
+Wichtige Felder in `config.yaml`:
+
+```yaml
+sync_mode: stream          # "stream" oder "mirror"
+conflict_mode: manual      # "manual" (Standard) oder "auto"
+mirror_interval_sec: 300   # Polling-Intervall im Mirror-Modus (Sekunden)
+autostart_disabled: false  # true = kein Autostart beim Anmelden
+```
+
+Laufzeitdaten liegen unter `~/.local/state/gdrive-sync/` (bzw. `$XDG_STATE_HOME`):
+
+- `status.json` – aktueller Status für Monitoring (JSON-Status-API)
+- `logs/gdrive-sync-JJJJ-MM-TT.log` – tägliche Logdateien, 7 Tage Aufbewahrung
+
+Der VFS-/bisync-Cache liegt unter `~/.cache/gdrive-sync/` (u. a. `bisync/` mit
+Arbeits- und Sperrdateien).
 
 ## Architektur
 
@@ -117,11 +161,14 @@ Der VFS-Cache (Stream-Modus) liegt unter `~/.cache/gdrive-sync/`.
 cmd/gdrive-sync      Einstiegspunkt (Daemon, CLI, Single-Instance)
 internal/config      Laden/Speichern der YAML-Konfiguration
 internal/rclone      rclone-Wrapper (Login, mount, bisync, RC-API, Listing)
-internal/manager     Sync-Manager: Modus-Steuerung, Status, Offline-Pinning
+internal/manager     Sync-Manager: Modus-Steuerung, Status, Offline-Pinning,
+                     inotify-Watcher, Auto-Recovery, Konfliktauflösung
 internal/webui       lokaler Steuer-Server (127.0.0.1) + eingebettete Oberfläche
 internal/window      natives Einstellungs-Fenster (WebKitGTK via dlopen, ohne Dev-Header)
 internal/tray        Tray-Icon über DBus StatusNotifierItem (ohne GTK/cgo)
 internal/notify      Desktop-Benachrichtigungen über DBus
+internal/logbuf      In-Memory-Ringpuffer für das Protokoll in der Oberfläche
+internal/logfile     Tages-rotierende Logdatei mit 7-Tage-Aufbewahrung
 packaging/           AppRun, Desktop-File, Icon
 build-appimage.sh    Build-Skript
 ```
@@ -131,8 +178,13 @@ build-appimage.sh    Build-Skript
 - *Stream* startet `rclone mount` mit vollem VFS-Cache. Als „offline" markierte
   Ordner werden vollständig durch den Mount gelesen, damit sie im Cache landen und
   ohne Verbindung verfügbar bleiben.
-- *Mirror* nutzt `rclone bisync` für eine echte Zwei-Wege-Synchronisation und
-  gleicht in einem einstellbaren Intervall (Standard 5 min) sowie auf Knopfdruck ab.
+- *Mirror* nutzt `rclone bisync` für eine echte Zwei-Wege-Synchronisation. Der
+  Abgleich läuft im einstellbaren Intervall (Standard 5 min), auf Knopfdruck und
+  **sofort bei lokalen Änderungen** (inotify-Watcher). Konflikte werden je nach
+  Einstellung automatisch (neuer gewinnt, im Zweifel Cloud, datierte Sicherung)
+  oder manuell in der Oberfläche gelöst. Nach mehreren Fehlversuchen erzwingt der
+  Dienst einen vollständigen `--resync` (Auto-Recovery); verwaiste Sperren werden
+  vor jedem Lauf bereinigt.
 
 ## Hinweise / bekannte Grenzen
 
