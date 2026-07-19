@@ -138,13 +138,29 @@ func (c *Client) UserEmail(ctx context.Context) string {
 func (c *Client) MountArgs(mountpoint, rcAddr, cacheDir string) []string {
 	return append(c.base(),
 		"mount", c.Remote(), mountpoint,
+		// Local read/write cache: edits land on disk instantly, uploads run in
+		// the background. Nothing is evicted, so offline-pinned files persist.
 		"--vfs-cache-mode", "full",
 		"--vfs-cache-max-age", "9999h",
 		"--vfs-cache-max-size", "off",
-		"--cache-dir", cacheDir,
-		"--dir-cache-time", "30s",
-		"--poll-interval", "15s",
 		"--vfs-write-back", "5s",
+		"--vfs-read-ahead", "128M",
+		"--cache-dir", cacheDir,
+		// Cache directory listings for a long time and detect remote changes via
+		// Drive's change-polling instead — this is the big win against lag when
+		// browsing/copying, since file managers stat constantly.
+		"--dir-cache-time", "1000h",
+		"--poll-interval", "10s",
+		"--attr-timeout", "3s",
+		// Throughput.
+		"--buffer-size", "32M",
+		"--vfs-read-chunk-size", "32M",
+		"--vfs-read-chunk-size-limit", "1G",
+		"--transfers", "8",
+		"--checkers", "16",
+		"--vfs-fast-fingerprint",
+		"--use-mmap",
+		// Control API for status/refresh + POSIX perms.
 		"--rc", "--rc-addr", rcAddr, "--rc-no-auth",
 		"--file-perms", "0644",
 		"--dir-perms", "0755",
