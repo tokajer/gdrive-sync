@@ -153,6 +153,7 @@ func (m *Manager) forgetPath(ctx context.Context, rel string) {
 func (m *Manager) pollStats(ctx context.Context) {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
+	var lastReported string
 	for {
 		select {
 		case <-ctx.Done():
@@ -164,6 +165,10 @@ func (m *Manager) pollStats(ctx context.Context) {
 		cancel()
 		if err != nil {
 			continue
+		}
+		if s.LastError != "" && s.LastError != lastReported {
+			lastReported = s.LastError
+			m.logf("ERROR: %s", s.LastError)
 		}
 		m.mu.Lock()
 		m.status.Bytes = s.Bytes

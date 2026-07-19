@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gdrive-sync/internal/config"
+	"gdrive-sync/internal/logbuf"
 	"gdrive-sync/internal/manager"
 )
 
@@ -24,6 +25,7 @@ var indexHTML []byte
 type Server struct {
 	mgr  *manager.Manager
 	cfg  *config.Config
+	logs *logbuf.Buffer
 	addr string
 	log  func(string, ...any)
 
@@ -34,15 +36,13 @@ type Server struct {
 }
 
 // New creates a settings server bound to 127.0.0.1 on the config's WebPort.
-func New(mgr *manager.Manager, cfg *config.Config, log func(string, ...any)) *Server {
-	if log == nil {
-		log = func(string, ...any) {}
-	}
+func New(mgr *manager.Manager, cfg *config.Config, logs *logbuf.Buffer) *Server {
 	return &Server{
 		mgr:  mgr,
 		cfg:  cfg,
+		logs: logs,
 		addr: fmt.Sprintf("127.0.0.1:%d", cfg.WebPort),
-		log:  log,
+		log:  logs.Logf,
 	}
 }
 
@@ -64,6 +64,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browse", s.handleBrowse)
 	mux.HandleFunc("/api/offline", s.handleOffline)
 	mux.HandleFunc("/api/open", s.handleOpen)
+	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -275,5 +277,16 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		_ = exec.Command("xdg-open", s.cfg.LocalDir).Start()
 	}()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	errorsOnly := r.URL.Query().Get("level") == "error"
+	writeJSON(w, map[string]any{"entries": s.logs.Entries(errorsOnly)})
+}
+
+func (s *Server) handleLogsClear(w http.ResponseWriter, r *http.Request) {
+	s.logs.Clear()
+	s.mgr.ResetErrors()
 	writeJSON(w, map[string]any{"ok": true})
 }

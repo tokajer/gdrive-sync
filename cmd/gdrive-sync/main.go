@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gdrive-sync/internal/config"
+	"gdrive-sync/internal/logbuf"
 	"gdrive-sync/internal/manager"
 	"gdrive-sync/internal/notify"
 	"gdrive-sync/internal/tray"
@@ -78,7 +79,8 @@ func runDaemon() {
 		return
 	}
 
-	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	logs := logbuf.New(1000)
+	logf := logs.Logf
 	notifier := notify.NewDBus("Google Drive Sync", "gdrive-sync")
 
 	mgr, err := manager.New(cfg, notifier, logf)
@@ -91,7 +93,7 @@ func runDaemon() {
 
 	mgr.Start(ctx)
 
-	web := webui.New(mgr, cfg, logf)
+	web := webui.New(mgr, cfg, logs)
 
 	// Tray icon (best-effort; the daemon runs fine without it).
 	go func() {

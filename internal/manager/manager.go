@@ -294,9 +294,23 @@ func (m *Manager) Subscribe(fn func(Status)) {
 }
 
 func (m *Manager) setState(s State, msg string) {
+	if s == StateError {
+		m.logf("ERROR: %s", msg)
+	}
 	m.mu.Lock()
 	m.status.State = s
 	m.status.Message = msg
+	m.mu.Unlock()
+	m.broadcast()
+}
+
+// ResetErrors clears rclone's error counter and the current error state.
+func (m *Manager) ResetErrors() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.ctl.ResetStats(ctx)
+	m.mu.Lock()
+	m.status.Errors = 0
 	m.mu.Unlock()
 	m.broadcast()
 }

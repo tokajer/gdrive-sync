@@ -69,6 +69,13 @@
   .off { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   input[type=checkbox] { width: 16px; height: 16px; }
   .hidden { display: none; }
+  .log { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-family: ui-monospace, monospace; font-size: 12px; }
+  .logline { display: flex; gap: 8px; padding: 4px 10px; border-top: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+  .logline:first-child { border-top: none; }
+  .logline .t { color: var(--muted); flex-shrink: 0; }
+  .logline.error .m { color: var(--err); }
+  .logline.warn .m { color: var(--warn); }
+  .clickable { cursor: pointer; text-decoration: underline dotted; }
   .loginbox { background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin-top: 12px; font-size: 13px; }
   .loginbox a { color: var(--accent); word-break: break-all; }
   code { font-family: ui-monospace, monospace; }
@@ -127,6 +134,24 @@
     </div>
   </div>
 
+  <!-- LOG -->
+  <div class="card">
+    <div class="row" style="cursor:pointer" id="logHeader">
+      <h2 style="margin:0">Protokoll <span id="logToggle" class="muted">▸ anzeigen</span></h2>
+      <span class="spacer"></span>
+      <span id="logErrCount" class="pill hidden" style="border-color:var(--err);color:var(--err)"></span>
+    </div>
+    <div id="logBody" class="hidden" style="margin-top:14px">
+      <div class="row" style="margin-bottom:10px">
+        <label class="off"><input type="checkbox" id="logOnlyErr"> nur Fehler</label>
+        <span class="spacer"></span>
+        <button id="logRefresh" style="padding:4px 10px">Aktualisieren</button>
+        <button id="logClear" style="padding:4px 10px">Löschen</button>
+      </div>
+      <div id="logList" class="log"></div>
+    </div>
+  </div>
+
   <!-- OFFLINE BROWSER (stream mode only) -->
   <div class="card" id="offlineCard">
     <h2>Offline verfügbar</h2>
@@ -154,11 +179,17 @@ async function refreshStatus(){
     $('#dot').className = 'dot ' + st.state;
     $('#state').textContent = st.message || stateLabels[st.state] || st.state;
     $('#account').textContent = st.account || '';
-    let stats = '';
-    if(st.speed>0) stats = '↑↓ ' + fmtBytes(st.speed)+'/s';
-    if(st.last_sync && st.last_sync.indexOf('0001')!==0) stats += (stats?'  ·  ':'') + 'Letzter Abgleich: '+ new Date(st.last_sync).toLocaleTimeString();
-    if(st.errors>0) stats += (stats?'  ·  ':'') + st.errors+' Fehler';
-    $('#stats').textContent = stats;
+    let parts = [];
+    if(st.speed>0) parts.push('↑↓ ' + fmtBytes(st.speed)+'/s');
+    if(st.last_sync && st.last_sync.indexOf('0001')!==0) parts.push('Letzter Abgleich: '+ new Date(st.last_sync).toLocaleTimeString());
+    $('#stats').innerHTML = parts.join('  ·  ');
+    if(st.errors>0){
+      const sep = parts.length ? '  ·  ' : '';
+      $('#stats').innerHTML += sep + '<span class="clickable" style="color:var(--err)" onclick="openLog()">'+st.errors+' Fehler</span>';
+      const pill = $('#logErrCount'); pill.textContent = st.errors+' Fehler'; pill.classList.remove('hidden');
+    } else {
+      $('#logErrCount').classList.add('hidden');
+    }
 
     $('#btnPause').textContent = st.state==='paused' ? 'Fortsetzen' : 'Pausieren';
     $('#loginCard').classList.toggle('hidden', d.configured);
@@ -243,9 +274,36 @@ async function browse(path){
 }
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+// --- log panel ---
+let logOpen = false;
+function toggleLog(force){
+  logOpen = (typeof force==='boolean') ? force : !logOpen;
+  $('#logBody').classList.toggle('hidden', !logOpen);
+  $('#logToggle').textContent = logOpen ? '▾ ausblenden' : '▸ anzeigen';
+  if(logOpen) loadLog();
+}
+function openLog(){ toggleLog(true); $('#logBody').scrollIntoView({behavior:'smooth', block:'nearest'}); }
+async function loadLog(){
+  const only = $('#logOnlyErr').checked ? '?level=error' : '';
+  const d = await api('/api/logs'+only);
+  const list = $('#logList'); list.innerHTML='';
+  if(d.entries.length===0){ list.innerHTML='<div class="logline muted">Keine Einträge</div>'; return; }
+  d.entries.slice().reverse().forEach(e=>{
+    const div=document.createElement('div'); div.className='logline '+e.level;
+    const t=new Date(e.time).toLocaleTimeString();
+    div.innerHTML='<span class="t">'+t+'</span><span class="m">'+escapeHtml(e.msg)+'</span>';
+    list.appendChild(div);
+  });
+}
+$('#logHeader').onclick = ()=>toggleLog();
+$('#logRefresh').onclick = (e)=>{ e.stopPropagation(); loadLog(); };
+$('#logOnlyErr').onchange = loadLog;
+$('#logClear').onclick = async (e)=>{ e.stopPropagation(); if(confirm('Protokoll und Fehlerzähler zurücksetzen?')){ await post('/api/logs/clear'); loadLog(); refreshStatus(); } };
+
 // init
 refreshStatus();
 setInterval(refreshStatus, 2500);
+setInterval(()=>{ if(logOpen) loadLog(); }, 4000);
 setTimeout(async ()=>{ const d = await api('/api/status'); if(d.configured && d.status.mode==='stream') browse(''); }, 400);
 </script>
 </body>

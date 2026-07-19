@@ -68,6 +68,13 @@ type Stats struct {
 	Bytes        int64
 	Speed        float64
 	Errors       int64
+	LastError    string
+}
+
+// ResetStats clears rclone's accumulated transfer statistics (incl. error count).
+func (r *RC) ResetStats(ctx context.Context) error {
+	_, err := r.call(ctx, "core/stats-reset", nil)
+	return err
 }
 
 // CoreStats returns the current transfer statistics from the mount.
@@ -85,6 +92,9 @@ func (r *RC) CoreStats(ctx context.Context) (Stats, error) {
 	}
 	if v, ok := out["errors"].(float64); ok {
 		s.Errors = int64(v)
+	}
+	if v, ok := out["lastError"].(string); ok {
+		s.LastError = v
 	}
 	if arr, ok := out["transferring"].([]any); ok {
 		s.Transferring = len(arr)
