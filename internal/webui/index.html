@@ -425,7 +425,7 @@ async function loadUpdate(){
 function openUpdate(){ $('#updateCard').scrollIntoView({behavior:'smooth', block:'start'}); }
 $('#updCheck').onclick = async ()=>{ $('#updMsg').textContent='Suche nach Updates…'; try{ await post('/api/update/check'); }catch(e){} loadUpdate(); };
 $('#updApply').onclick = async ()=>{ if(confirm('Update herunterladen und installieren?')){ await post('/api/update/apply'); loadUpdate(); } };
-$('#updRestart').onclick = async ()=>{ if(confirm('Zum Abschließen des Updates jetzt neu starten?')){ await post('/api/update/restart'); $('#updMsg').textContent='Neustart…'; } };
+$('#updRestart').onclick = async ()=>{ if(confirm('Zum Abschließen des Updates jetzt neu starten?')){ await post('/api/update/restart'); $('#updMsg').textContent='Neustart…'; setTimeout(()=>{ try{ window.close(); }catch(e){} }, 400); } };
 $('#updPre').onchange = async ()=>{ await post('/api/update/prerelease',{on:$('#updPre').checked}); $('#updMsg').textContent='Prüfe…'; setTimeout(loadUpdate, 800); };
 
 // init

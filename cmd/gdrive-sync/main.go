@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -125,6 +126,9 @@ func runDaemon() {
 	// apply an update with one click from the settings window.
 	upd := updater.New(version, cfg.UpdatePrerelease, logf)
 	restart := func() {
+		// Close any open settings window so the update restart is clean and no
+		// stale window lingers against the old daemon.
+		closeWindows()
 		exe := os.Getenv("APPIMAGE")
 		if exe == "" {
 			if e, err := os.Executable(); err == nil {
@@ -263,6 +267,13 @@ func openWindowCmd() {
 	}
 }
 
+// windowProcs tracks settings-window child processes so the daemon can close
+// them (e.g. on an update restart).
+var windowProcs struct {
+	mu   sync.Mutex
+	cmds []*exec.Cmd
+}
+
 // spawnWindow launches the settings window as a separate process so the daemon
 // keeps running and GTK stays isolated on its own main thread.
 func spawnWindow() {
@@ -275,6 +286,25 @@ func spawnWindow() {
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		log.Printf("Fenster-Start fehlgeschlagen: %v", err)
+		return
+	}
+	windowProcs.mu.Lock()
+	windowProcs.cmds = append(windowProcs.cmds, cmd)
+	windowProcs.mu.Unlock()
+}
+
+// closeWindows asks every settings window this daemon started to close.
+func closeWindows() {
+	windowProcs.mu.Lock()
+	cmds := windowProcs.cmds
+	windowProcs.cmds = nil
+	windowProcs.mu.Unlock()
+	for _, cmd := range cmds {
+		if cmd.Process == nil {
+			continue
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		go func(c *exec.Cmd) { _, _ = c.Process.Wait() }(cmd)
 	}
 }
 

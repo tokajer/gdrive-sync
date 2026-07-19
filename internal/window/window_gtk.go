@@ -48,6 +48,12 @@ static void on_destroy(void* w, void* d) {
 	if (p_main_quit) p_main_quit();
 }
 
+// close handler: JavaScript window.close() makes WebKit emit "close"; quit the
+// GTK main loop so the settings window closes (used on an update restart).
+static void on_close(void* w, void* d) {
+	if (p_main_quit) p_main_quit();
+}
+
 static int load_syms(void) {
 	h_gtk  = dlopen("libgtk-3.so.0", RTLD_NOW | RTLD_GLOBAL);
 	h_gobj = dlopen("libgobject-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
@@ -107,6 +113,8 @@ static int run_window(const char* title, const char* url, const char* icon) {
 	void* wv = p_wk_new();
 	p_add(win, wv);
 	if (p_grab_focus) p_grab_focus(wv);
+	// Let the page close its own window via JavaScript window.close().
+	p_connect(wv, "close", (void*)on_close, 0, 0, 0);
 	p_wk_load(wv, url);
 
 	p_show_all(win);
